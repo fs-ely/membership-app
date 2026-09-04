@@ -113,6 +113,11 @@ dist
 # FuseBox cache
 .fusebox/
 
+# opencode
+.opencode/
+opencode.json
+
+
 # DynamoDB Local files
 .dynamodb/
 
