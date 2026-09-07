@@ -58,6 +58,14 @@ export const getProfile = async () => {
   return response.data;
 };
 
+export const updateProfile = async (data) => {
+  const token = localStorage.getItem('token');
+  const response = await axios.put(`${BASE_URL}/auth/profile`, data, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return response.data;
+};
+
 // Records
 export const getRecords = async () => {
   const token = localStorage.getItem('token');

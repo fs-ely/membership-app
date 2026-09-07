@@ -10,7 +10,9 @@ const createTables = async () => {
         password VARCHAR(255) NOT NULL,
         name VARCHAR(100) NOT NULL,
         role VARCHAR(20) DEFAULT 'regular',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        profile_image VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
@@ -33,6 +35,24 @@ const createTables = async () => {
     if (roleCheck.rows.length === 0) {
       await client.query("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'regular'");
       console.log('Added role column to users table');
+    }
+
+    const userProfileImageCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'users' AND column_name = 'profile_image'
+    `);
+    if (userProfileImageCheck.rows.length === 0) {
+      await client.query("ALTER TABLE users ADD COLUMN profile_image VARCHAR(255)");
+      console.log('Added profile_image column to users table');
+    }
+
+    const updatedAtCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'users' AND column_name = 'updated_at'
+    `);
+    if (updatedAtCheck.rows.length === 0) {
+      await client.query("ALTER TABLE users ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+      console.log('Added updated_at column to users table');
     }
 
     await client.query(`

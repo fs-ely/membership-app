@@ -1,10 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import BrandHeader from './BrandHeader';
+import EditProfileModal from './EditProfileModal';
+import { UPLOADS_URL } from '../services/api';
 
 const Dashboard = () => {
   const { user, logout, isAdmin } = useAuth();
+  const [editModalOpen, setEditModalOpen] = useState(false);
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -17,6 +20,8 @@ const Dashboard = () => {
     return null;
   }
 
+  const avatarSrc = user.profile_image ? `${UPLOADS_URL}/${user.profile_image}` : '';
+
   return (
     <div style={styles.container}>
       <BrandHeader />
@@ -24,9 +29,13 @@ const Dashboard = () => {
       <div style={styles.card}>
         <h2 style={styles.title}>Dashboard</h2>
         <div style={styles.profileSection}>
-          <div style={styles.avatar}>
-            {user.name?.charAt(0).toUpperCase()}
-          </div>
+          {avatarSrc ? (
+            <img src={avatarSrc} alt="Profile" style={styles.avatarImage} />
+          ) : (
+            <div style={styles.avatar}>
+              {user.name?.charAt(0).toUpperCase()}
+            </div>
+          )}
           <h3 style={styles.name}>
             {user.name}
             <span style={isAdmin ? styles.adminBadge : styles.regularBadge}>
@@ -45,12 +54,16 @@ const Dashboard = () => {
           <button onClick={() => navigate('/records')} style={styles.recordsButton}>
             Manage Records
           </button>
+          <button onClick={() => setEditModalOpen(true)} style={styles.editButton} data-test="edit-profile-button">
+            Edit Profile
+          </button>
           <button onClick={handleLogout} style={styles.logoutButton}>
             Logout
           </button>
         </div>
       </div>
       </div>
+      <EditProfileModal isOpen={editModalOpen} onClose={() => setEditModalOpen(false)} />
     </div>
   );
 };
@@ -102,6 +115,14 @@ const styles = {
     fontWeight: 'bold',
     margin: '0 auto 20px',
   },
+  avatarImage: {
+    width: '80px',
+    height: '80px',
+    borderRadius: '50%',
+    objectFit: 'cover',
+    margin: '0 auto 20px',
+    border: '1px solid #ddd',
+  },
   name: {
     margin: '0 0 10px',
     color: '#333',
@@ -152,6 +173,15 @@ const styles = {
   recordsButton: {
     padding: '12px 24px',
     backgroundColor: '#007bff',
+    color: 'white',
+    border: 'none',
+    borderRadius: '4px',
+    fontSize: '14px',
+    cursor: 'pointer',
+  },
+  editButton: {
+    padding: '12px 24px',
+    backgroundColor: '#28a745',
     color: 'white',
     border: 'none',
     borderRadius: '4px',
