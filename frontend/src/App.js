@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './context/AuthContext';
 import LoginForm from './components/LoginForm';
 import RegisterForm from './components/RegisterForm';
+import ForgotPassword from './components/ForgotPassword';
 import OTPVerification from './components/OTPVerification';
 import Dashboard from './components/Dashboard';
 import RecordsList from './components/RecordsList';
@@ -48,6 +49,11 @@ function App() {
           <Route path="/register" element={
             <PublicRoute>
               <RegisterForm />
+            </PublicRoute>
+          } />
+          <Route path="/forgot-password" element={
+            <PublicRoute>
+              <ForgotPassword />
             </PublicRoute>
           } />
           <Route path="/verify-otp" element={<OTPVerification />} />

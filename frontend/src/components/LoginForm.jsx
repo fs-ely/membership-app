@@ -62,6 +62,8 @@ const LoginForm = () => {
         </form>
         <p style={styles.link}>
           Don't have an account? <Link to="/register">Register</Link>
+          &nbsp;|&nbsp;
+          <Link to="/forgot-password">Forgot password?</Link>
         </p>
       </div>
       <div style={styles.accountsBox}>
