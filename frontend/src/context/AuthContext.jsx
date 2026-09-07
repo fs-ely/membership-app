@@ -31,6 +31,15 @@ export const AuthProvider = ({ children }) => {
     setUser(userData);
   };
 
+  const refreshUser = async () => {
+    try {
+      const data = await getProfile();
+      setUser(data.user);
+    } catch (error) {
+      console.error('Failed to refresh user', error);
+    }
+  };
+
   const logout = () => {
     localStorage.removeItem('token');
     setToken(null);
@@ -40,7 +49,7 @@ export const AuthProvider = ({ children }) => {
   const isAdmin = user?.role === 'admin';
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, loginUser, logout, isAdmin }}>
+    <AuthContext.Provider value={{ user, token, loading, loginUser, refreshUser, logout, isAdmin }}>
       {children}
     </AuthContext.Provider>
   );

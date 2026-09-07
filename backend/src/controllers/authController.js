@@ -1,7 +1,20 @@
 const bcrypt = require('bcrypt');
+const fs = require('fs');
+const path = require('path');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const generateOTP = require('../utils/otpGenerator');
+const { UPLOADS_DIR } = require('../utils/uploads');
+
+const removeFile = (filename) => {
+  if (!filename) return;
+  const filePath = path.join(UPLOADS_DIR, path.basename(filename));
+  fs.unlink(filePath, (err) => {
+    if (err && err.code !== 'ENOENT') {
+      console.error('Failed to remove file:', err);
+    }
+  });
+};
 
 // Register new user
 const register = async (req, res) => {
@@ -228,7 +241,7 @@ const resetPassword = async (req, res) => {
 const getProfile = async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, phone, name, role, created_at FROM users WHERE id = $1',
+      'SELECT id, phone, name, role, profile_image, created_at, updated_at FROM users WHERE id = $1',
       [req.user.userId]
     );
 
@@ -243,4 +256,56 @@ const getProfile = async (req, res) => {
   }
 };
 
-module.exports = { register, login, verifyOTP, forgotPassword, resetPassword, getProfile };
+// Update user profile (protected route)
+const updateProfile = async (req, res) => {
+  try {
+    const { name, phone } = req.body;
+    const profileImage = req.file ? req.file.filename : null;
+
+    if (!name || !phone) {
+      if (req.file) removeFile(req.file.filename);
+      return res.status(400).json({ error: 'Name and phone are required' });
+    }
+
+    const existingResult = await pool.query(
+      'SELECT phone, profile_image FROM users WHERE id = $1',
+      [req.user.userId]
+    );
+    if (existingResult.rows.length === 0) {
+      if (req.file) removeFile(req.file.filename);
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const existingUser = existingResult.rows[0];
+
+    if (existingUser.phone !== phone) {
+      const duplicate = await pool.query('SELECT id FROM users WHERE phone = $1', [phone]);
+      if (duplicate.rows.length > 0) {
+        if (req.file) removeFile(req.file.filename);
+        return res.status(400).json({ error: 'User with this phone already exists' });
+      }
+    }
+
+    const result = await pool.query(
+      `UPDATE users 
+       SET name = $1, phone = $2, profile_image = $3, updated_at = NOW() 
+       WHERE id = $4 
+       RETURNING id, phone, name, role, profile_image, created_at, updated_at`,
+      [name, phone, profileImage || existingUser.profile_image, req.user.userId]
+    );
+
+    if (req.file && existingUser.profile_image) {
+      removeFile(existingUser.profile_image);
+    }
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: result.rows[0]
+    });
+  } catch (error) {
+    if (req.file) removeFile(req.file.filename);
+    console.error('Update profile error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+module.exports = { register, login, verifyOTP, forgotPassword, resetPassword, getProfile, updateProfile };
