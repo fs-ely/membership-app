@@ -1,6 +1,6 @@
 # JasaSane Corp
 
-A full-stack authentication demo implementing two-factor authentication (2FA) using a one-time password (OTP). A user registers with a phone number and password, logs in, and receives a 6-digit OTP that must be verified before a JWT is issued for access to protected routes.
+A full-stack membership registration system with two-factor authentication (2FA). Users register with a phone number and password, log in via OTP verification, and gain the ability to register and manage member records. Any registered user can add members with their personal details, location, and profile image.
 
 Built with:
 
@@ -11,6 +11,7 @@ Built with:
 
 ## Features
 
+### Authentication
 - User registration with name, phone, and password
 - Password-based login that generates a 6-digit OTP
 - OTP delivered to the server console (simulated SMS; no SMS provider)
@@ -21,34 +22,65 @@ Built with:
 - Forgot password flow that sends a reset OTP to the server console
 - Persistent sessions via localStorage token + profile refresh
 
+### Member Registration
+- Register members with first name, last name, email address, and profile image
+- Hierarchical location selection (Country → Province → City → Barangay)
+- Edit and delete member records
+- Role-based access: Admin sees all members, Regular users see only their own
+- Profile image upload with preview
+
 ## How It Works
 
 1. User registers with name, phone, and password (bcrypt-hashed).
 2. User logs in with phone + password → the backend generates a 6-digit OTP, stores it in the `otps` table, and logs it to the server console.
 3. User enters the OTP → the backend validates it (must be unused and unexpired), marks it used, and issues a JWT.
-4. The JWT authorizes access to protected endpoints (e.g., `/profile`), which the frontend uses to display the dashboard.
+4. The JWT authorizes access to protected endpoints (e.g., `/profile`, `/records`), which the frontend uses to display the dashboard.
+5. Any registered user can navigate to "Manage Records" and register new members by providing their first name, last name, email, location, and optional profile image.
+6. Admin users can view and manage all member records; regular users can only view and manage their own records.
 
 ## Project Structure
 
 ```
-opencode-activity/
+membership-app/
 ├── backend/
 │   ├── src/
-│   │   ├── config/db.js            # PostgreSQL pool
-│   │   ├── controllers/authController.js  # register/login/verifyOTP/getProfile
-│   │   ├── middleware/auth.js      # JWT verification guard
-│   │   ├── models/init.js          # Auto-creates users & otps tables
-│   │   ├── routes/auth.js          # /api/auth routes
-│   │   ├── server.js               # Express app entry point
-│   │   └── utils/otpGenerator.js   # Cryptographically secure 6-digit OTP
-│   ├── .env                        # Environment configuration
+│   │   ├── config/db.js              # PostgreSQL pool
+│   │   ├── controllers/
+│   │   │   ├── authController.js     # register/login/verifyOTP/getProfile/updateProfile
+│   │   │   ├── recordController.js   # CRUD operations for member records
+│   │   │   └── locationController.js # Country/province/city/barangay data
+│   │   ├── middleware/
+│   │   │   ├── auth.js               # JWT verification guard
+│   │   │   └── role.js               # Role-based access control
+│   │   ├── models/init.js            # Auto-creates users, otps, records tables
+│   │   ├── routes/
+│   │   │   ├── auth.js               # /api/auth routes
+│   │   │   ├── records.js            # /api/records routes
+│   │   │   └── locations.js          # /api/locations routes
+│   │   ├── utils/
+│   │   │   ├── otpGenerator.js       # Cryptographically secure 6-digit OTP
+│   │   │   └── uploads.js            # File upload configuration
+│   │   └── server.js                 # Express app entry point
+│   ├── data/locations.json           # Philippine location data
+│   ├── uploads/                      # Uploaded profile images
+│   ├── .env                          # Environment configuration
 │   └── package.json
 └── frontend/
     └── src/
-        ├── components/             # LoginForm, RegisterForm, OTPVerification, Dashboard
-        ├── context/AuthContext.jsx # Auth state + token persistence
-        ├── services/api.js         # Axios client with auth interceptor
-        ├── App.js                  # Routing + protected/public route guards
+        ├── components/
+        │   ├── LoginForm.jsx         # Phone + password login
+        │   ├── RegisterForm.jsx      # User registration
+        │   ├── OTPVerification.jsx   # 6-digit OTP entry
+        │   ├── Dashboard.jsx         # User profile & navigation
+        │   ├── RecordsList.jsx       # Member records table
+        │   ├── RecordFormModal.jsx   # Create/edit member form
+        │   ├── EditProfileModal.jsx  # Edit user profile
+        │   ├── ForgotPassword.jsx    # Password reset flow
+        │   ├── Modal.jsx             # Reusable modal component
+        │   └── BrandHeader.jsx       # App header/branding
+        ├── context/AuthContext.jsx   # Auth state + token persistence
+        ├── services/api.js           # Axios client with auth interceptor
+        ├── App.js                    # Routing + protected/public route guards
         └── index.js
 ```
 
@@ -170,8 +202,21 @@ With both terminals running, open `http://localhost:3000` in your browser.
 5. Enter the 6-digit OTP on the verification screen
 6. Access the protected dashboard and log out when done
 
+### Registering Members
+
+1. Log in and navigate to the dashboard
+2. Click **Manage Records**
+3. Click **+ Add Record** to open the member registration form
+4. Enter the member's first name, last name, email address, and optional profile image
+5. Select the location using the cascading dropdowns (Country → Province → City → Barangay)
+6. Click **Create** to save the member record
+7. Edit or delete existing members using the **Edit** and **Delete** buttons in the records table
+
+> Any registered user has the power to register new members. Admin users can view and manage all member records, while regular users can only manage the members they created.
+
 ## API Endpoints
 
+### Authentication
 | Method | Endpoint               | Description                               | Auth               |
 | ------ | ---------------------- | ----------------------------------------- | ------------------ |
 | GET    | `/api/health`          | Server health check                       | No                 |
@@ -181,6 +226,24 @@ With both terminals running, open `http://localhost:3000` in your browser.
 | POST   | `/api/auth/forgot-password` | Request password reset OTP (sent to console) | No           |
 | POST   | `/api/auth/reset-password`  | Verify reset OTP and set new password    | No                 |
 | GET    | `/api/auth/profile`    | Get authenticated user profile            | Yes (Bearer token) |
+| PUT    | `/api/auth/profile`    | Update user profile (with image upload)   | Yes (Bearer token) |
+
+### Member Records
+| Method | Endpoint               | Description                               | Auth               |
+| ------ | ---------------------- | ----------------------------------------- | ------------------ |
+| GET    | `/api/records`         | Get all records (admin) or own records    | Yes (Bearer token) |
+| GET    | `/api/records/:id`     | Get record by ID                          | Yes (Bearer token) |
+| POST   | `/api/records`         | Create new member record                  | Yes (Bearer token) |
+| PUT    | `/api/records/:id`     | Update member record                      | Yes (Bearer token) |
+| DELETE | `/api/records/:id`     | Delete member record                      | Yes (Bearer token) |
+
+### Locations (Philippine Address Data)
+| Method | Endpoint               | Description                               | Auth               |
+| ------ | ---------------------- | ----------------------------------------- | ------------------ |
+| GET    | `/api/locations/countries` | Get list of countries                 | No                 |
+| GET    | `/api/locations/provinces/:countryId` | Get provinces by country     | No                 |
+| GET    | `/api/locations/cities/:provinceId` | Get cities by province         | No                 |
+| GET    | `/api/locations/barangays/:cityId` | Get barangays by city           | No                 |
 
 ## Configuration (.env)
 
