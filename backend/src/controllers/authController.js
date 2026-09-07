@@ -67,11 +67,73 @@ const login = async (req, res) => {
     }
 
     const user = result.rows[0];
+    const isAdmin = user.role === 'admin';
+
+    // Lockout applies to non-admin users only
+    if (!isAdmin) {
+      const maxAttempts = parseInt(process.env.MAX_LOGIN_ATTEMPTS) || 3;
+      const lockoutMinutes = parseInt(process.env.LOCKOUT_MINUTES) || 15;
+      const lockoutUntil = user.lockout_until ? new Date(user.lockout_until) : null;
+
+      // Account is currently locked
+      if (lockoutUntil && lockoutUntil > new Date()) {
+        const remainingMinutes = Math.ceil((lockoutUntil - new Date()) / 60000);
+        return res.status(423).json({
+          error: `Account locked. Try again in ${remainingMinutes} minute(s).`
+        });
+      }
+
+      // Lockout expired - clear it
+      if (lockoutUntil && lockoutUntil <= new Date()) {
+        await pool.query(
+          'UPDATE users SET failed_login_attempts = 0, lockout_until = NULL WHERE id = $1',
+          [user.id]
+        );
+        user.failed_login_attempts = 0;
+        user.lockout_until = null;
+      }
+    }
 
     // Verify password
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
+      // Lockout applies to non-admin users only
+      if (!isAdmin) {
+        const maxAttempts = parseInt(process.env.MAX_LOGIN_ATTEMPTS) || 3;
+        const lockoutMinutes = parseInt(process.env.LOCKOUT_MINUTES) || 15;
+        const newAttempts = (user.failed_login_attempts || 0) + 1;
+
+        if (newAttempts >= maxAttempts) {
+          const lockoutUntil = new Date(Date.now() + lockoutMinutes * 60 * 1000);
+          await pool.query(
+            'UPDATE users SET failed_login_attempts = 0, lockout_until = $1 WHERE id = $2',
+            [lockoutUntil, user.id]
+          );
+          return res.status(423).json({
+            error: `Account locked due to too many failed attempts. Try again in ${lockoutMinutes} minute(s).`
+          });
+        }
+
+        await pool.query(
+          'UPDATE users SET failed_login_attempts = $1 WHERE id = $2',
+          [newAttempts, user.id]
+        );
+
+        const attemptsLeft = maxAttempts - newAttempts;
+        return res.status(401).json({
+          error: `Invalid credentials. ${attemptsLeft} attempt(s) remaining.`
+        });
+      }
+
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Clear lockout on successful login (non-admin users)
+    if (!isAdmin) {
+      await pool.query(
+        'UPDATE users SET failed_login_attempts = 0, lockout_until = NULL WHERE id = $1',
+        [user.id]
+      );
     }
 
     // Generate OTP
@@ -227,8 +289,11 @@ const resetPassword = async (req, res) => {
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
-    // Update password
-    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, userId]);
+    // Update password and clear any lockout
+    await pool.query(
+      'UPDATE users SET password = $1, failed_login_attempts = 0, lockout_until = NULL WHERE id = $2',
+      [hashedPassword, userId]
+    );
 
     res.json({ message: 'Password reset successfully' });
   } catch (error) {

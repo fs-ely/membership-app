@@ -11,6 +11,8 @@ const createTables = async () => {
         name VARCHAR(100) NOT NULL,
         role VARCHAR(20) DEFAULT 'regular',
         profile_image VARCHAR(255),
+        failed_login_attempts INTEGER DEFAULT 0,
+        lockout_until TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -53,6 +55,24 @@ const createTables = async () => {
     if (updatedAtCheck.rows.length === 0) {
       await client.query("ALTER TABLE users ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
       console.log('Added updated_at column to users table');
+    }
+
+    const failedLoginAttemptsCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'users' AND column_name = 'failed_login_attempts'
+    `);
+    if (failedLoginAttemptsCheck.rows.length === 0) {
+      await client.query('ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER DEFAULT 0');
+      console.log('Added failed_login_attempts column to users table');
+    }
+
+    const lockoutUntilCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'users' AND column_name = 'lockout_until'
+    `);
+    if (lockoutUntilCheck.rows.length === 0) {
+      await client.query('ALTER TABLE users ADD COLUMN lockout_until TIMESTAMP');
+      console.log('Added lockout_until column to users table');
     }
 
     await client.query(`
