@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { register } from '../services/api';
+import BrandHeader from './BrandHeader';
 
 const RegisterForm = () => {
   const [name, setName] = useState('');
@@ -27,6 +28,8 @@ const RegisterForm = () => {
 
   return (
     <div style={styles.container}>
+      <BrandHeader />
+      <div style={styles.body}>
       <div style={styles.card}>
         <h2 style={styles.title}>Register</h2>
         {error && <div style={styles.error}>{error}</div>}
@@ -73,6 +76,7 @@ const RegisterForm = () => {
           Already have an account? <Link to="/login">Login</Link>
         </p>
       </div>
+      </div>
     </div>
   );
 };
@@ -80,10 +84,20 @@ const RegisterForm = () => {
 const styles = {
   container: {
     display: 'flex',
-    justifyContent: 'center',
+    flexDirection: 'column',
     alignItems: 'center',
     minHeight: '100vh',
     backgroundColor: '#f5f5f5',
+  },
+  body: {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexGrow: 1,
+    width: '100%',
+    padding: '40px 20px',
+    boxSizing: 'border-box',
   },
   card: {
     backgroundColor: 'white',

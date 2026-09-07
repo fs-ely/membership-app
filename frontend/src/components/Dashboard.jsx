@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import BrandHeader from './BrandHeader';
 
 const Dashboard = () => {
   const { user, logout, isAdmin } = useAuth();
@@ -18,6 +19,8 @@ const Dashboard = () => {
 
   return (
     <div style={styles.container}>
+      <BrandHeader />
+      <div style={styles.body}>
       <div style={styles.card}>
         <h2 style={styles.title}>Dashboard</h2>
         <div style={styles.profileSection}>
@@ -47,6 +50,7 @@ const Dashboard = () => {
           </button>
         </div>
       </div>
+      </div>
     </div>
   );
 };
@@ -54,10 +58,20 @@ const Dashboard = () => {
 const styles = {
   container: {
     display: 'flex',
-    justifyContent: 'center',
+    flexDirection: 'column',
     alignItems: 'center',
     minHeight: '100vh',
     backgroundColor: '#f5f5f5',
+  },
+  body: {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexGrow: 1,
+    width: '100%',
+    padding: '40px 20px',
+    boxSizing: 'border-box',
   },
   card: {
     backgroundColor: 'white',

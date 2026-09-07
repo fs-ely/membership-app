@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { verifyOTP } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import BrandHeader from './BrandHeader';
 
 const OTPVerification = () => {
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
@@ -79,6 +80,8 @@ const OTPVerification = () => {
 
   return (
     <div style={styles.container}>
+      <BrandHeader />
+      <div style={styles.body}>
       <div style={styles.card}>
         <h2 style={styles.title}>Verify OTP</h2>
         <p style={styles.subtitle}>
@@ -113,6 +116,7 @@ const OTPVerification = () => {
           {timer > 0 ? `Resend OTP in ${timer}s` : 'OTP may have expired'}
         </p>
       </div>
+      </div>
     </div>
   );
 };
@@ -120,10 +124,20 @@ const OTPVerification = () => {
 const styles = {
   container: {
     display: 'flex',
-    justifyContent: 'center',
+    flexDirection: 'column',
     alignItems: 'center',
     minHeight: '100vh',
     backgroundColor: '#f5f5f5',
+  },
+  body: {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexGrow: 1,
+    width: '100%',
+    padding: '40px 20px',
+    boxSizing: 'border-box',
   },
   card: {
     backgroundColor: 'white',

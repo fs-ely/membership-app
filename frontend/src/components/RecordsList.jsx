@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getRecords, deleteRecord, UPLOADS_URL } from '../services/api';
 import RecordFormModal from './RecordFormModal';
+import BrandHeader from './BrandHeader';
 
 const RecordsList = () => {
   const [records, setRecords] = useState([]);
@@ -62,6 +63,8 @@ const RecordsList = () => {
 
   return (
     <div style={styles.page}>
+      <BrandHeader />
+      <div style={styles.body}>
       <div style={styles.container}>
         <div style={styles.header}>
           <div>
@@ -143,6 +146,7 @@ const RecordsList = () => {
           </div>
         )}
       </div>
+      </div>
 
       <RecordFormModal
         isOpen={modalOpen}
@@ -158,6 +162,8 @@ const styles = {
   page: {
     minHeight: '100vh',
     backgroundColor: '#f5f5f5',
+  },
+  body: {
     padding: '20px',
   },
   container: {

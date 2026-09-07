@@ -1,4 +1,4 @@
-# OTP/2FA Authentication App
+# JasaSane Corp
 
 A full-stack authentication demo implementing two-factor authentication (2FA) using a one-time password (OTP). A user registers with a phone number and password, logs in, and receives a 6-digit OTP that must be verified before a JWT is issued for access to protected routes.
 
