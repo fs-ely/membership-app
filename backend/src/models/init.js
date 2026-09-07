@@ -1,5 +1,4 @@
 const pool = require('../config/db');
-const bcrypt = require('bcrypt');
 
 const createTables = async () => {
   const client = await pool.connect();
@@ -44,21 +43,19 @@ const createTables = async () => {
         last_name VARCHAR(100) NOT NULL,
         email_address VARCHAR(255) NOT NULL,
         location TEXT,
+        profile_image VARCHAR(255),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
-    // Seed admin account
-    const adminPhone = '09999999999';
-    const existingAdmin = await client.query('SELECT id FROM users WHERE phone = $1', [adminPhone]);
-    if (existingAdmin.rows.length === 0) {
-      const hashedPassword = await bcrypt.hash('admin123', 10);
-      await client.query(
-        'INSERT INTO users (phone, password, name, role) VALUES ($1, $2, $3, $4)',
-        [adminPhone, hashedPassword, 'Admin User', 'admin']
-      );
-      console.log('Admin account seeded: phone=09999999999, password=admin123');
+    const profileImageCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'records' AND column_name = 'profile_image'
+    `);
+    if (profileImageCheck.rows.length === 0) {
+      await client.query("ALTER TABLE records ADD COLUMN profile_image VARCHAR(255)");
+      console.log('Added profile_image column to records table');
     }
 
     console.log('Database tables created successfully');

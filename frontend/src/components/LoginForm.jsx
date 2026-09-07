@@ -61,6 +61,18 @@ const LoginForm = () => {
           Don't have an account? <Link to="/register">Register</Link>
         </p>
       </div>
+      <div style={styles.accountsBox}>
+        <h3 style={styles.accountsTitle}>Default Seed Accounts</h3>
+        <div style={styles.accountItem}>
+          <strong>Admin</strong> — 09999999999 / Password@123
+        </div>
+        <div style={styles.accountItem}>
+          <strong>Regular</strong> — 09111111111 / Password@123
+        </div>
+        <div style={styles.accountItem}>
+          <strong>Regular</strong> — 09222222222 / Password@123
+        </div>
+      </div>
     </div>
   );
 };
@@ -68,6 +80,7 @@ const LoginForm = () => {
 const styles = {
   container: {
     display: 'flex',
+    flexDirection: 'column',
     justifyContent: 'center',
     alignItems: 'center',
     minHeight: '100vh',
@@ -125,6 +138,26 @@ const styles = {
     textAlign: 'center',
     marginTop: '20px',
     color: '#666',
+  },
+  accountsBox: {
+    marginTop: '20px',
+    width: '100%',
+    maxWidth: '400px',
+    backgroundColor: '#eef4ff',
+    border: '1px solid #c9d8f5',
+    borderRadius: '8px',
+    padding: '16px',
+  },
+  accountsTitle: {
+    margin: '0 0 12px 0',
+    fontSize: '15px',
+    color: '#333',
+  },
+  accountItem: {
+    padding: '8px 0',
+    borderBottom: '1px solid #d6e2f7',
+    fontSize: '13px',
+    color: '#444',
   },
 };
 
