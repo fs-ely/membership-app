@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { toast } from 'react-toastify';
 
 const API_URL = 'http://localhost:5000/api/auth';
 const BASE_URL = 'http://localhost:5000/api';
@@ -26,6 +27,44 @@ api.interceptors.request.use((config) => {
   }
   return config;
 });
+
+// Global response interceptor for session invalidation
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 403 && error.response?.data?.code === 'SESSION_INVALIDATED') {
+      localStorage.removeItem('token');
+      toast.error('Your account has been logged in from another device. You have been logged out.', {
+        position: 'top-right',
+        autoClose: 5000,
+        toastId: 'session-invalidated',
+      });
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 1500);
+    }
+    return Promise.reject(error);
+  }
+);
+
+// Also intercept raw axios calls for session invalidation
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 403 && error.response?.data?.code === 'SESSION_INVALIDATED') {
+      localStorage.removeItem('token');
+      toast.error('Your account has been logged in from another device. You have been logged out.', {
+        position: 'top-right',
+        autoClose: 5000,
+        toastId: 'session-invalidated',
+      });
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 1500);
+    }
+    return Promise.reject(error);
+  }
+);
 
 // Auth
 export const register = async (phone, password, name) => {
@@ -63,6 +102,11 @@ export const updateProfile = async (data) => {
   const response = await axios.put(`${BASE_URL}/auth/profile`, data, {
     headers: { Authorization: `Bearer ${token}` },
   });
+  return response.data;
+};
+
+export const logoutApi = async () => {
+  const response = await api.post('/logout');
   return response.data;
 };
 

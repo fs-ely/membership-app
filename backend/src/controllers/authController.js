@@ -200,6 +200,12 @@ const verifyOTP = async (req, res) => {
       { expiresIn: '1h' }
     );
 
+    // Store active session token (single session enforcement)
+    await pool.query(
+      'UPDATE users SET active_session_token = $1, active_session_created_at = NOW() WHERE id = $2',
+      [token, user.id]
+    );
+
     res.json({
       message: 'OTP verified successfully',
       token,
@@ -289,9 +295,9 @@ const resetPassword = async (req, res) => {
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
-    // Update password and clear any lockout
+    // Update password, clear any lockout, and invalidate all sessions
     await pool.query(
-      'UPDATE users SET password = $1, failed_login_attempts = 0, lockout_until = NULL WHERE id = $2',
+      'UPDATE users SET password = $1, failed_login_attempts = 0, lockout_until = NULL, active_session_token = NULL, active_session_created_at = NULL WHERE id = $2',
       [hashedPassword, userId]
     );
 
@@ -373,4 +379,19 @@ const updateProfile = async (req, res) => {
   }
 };
 
-module.exports = { register, login, verifyOTP, forgotPassword, resetPassword, getProfile, updateProfile };
+// Logout - clear active session
+const logout = async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE users SET active_session_token = NULL, active_session_created_at = NULL WHERE id = $1',
+      [req.user.userId]
+    );
+
+    res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+module.exports = { register, login, verifyOTP, forgotPassword, resetPassword, logout, getProfile, updateProfile };
