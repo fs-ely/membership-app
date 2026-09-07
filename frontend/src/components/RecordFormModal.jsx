@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Modal from './Modal';
-import { getCountries, getProvinces, getCities, getBarangays, createRecord, updateRecord } from '../services/api';
+import { getCountries, getProvinces, getCities, getBarangays, createRecord, updateRecord, UPLOADS_URL } from '../services/api';
 
 const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
   const [formData, setFormData] = useState({
@@ -8,6 +8,9 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
     last_name: '',
     email_address: '',
   });
+  const [profileImage, setProfileImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const [existingImage, setExistingImage] = useState('');
   const [countries, setCountries] = useState([]);
   const [provinces, setProvinces] = useState([]);
   const [cities, setCities] = useState([]);
@@ -29,6 +32,7 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
           last_name: record.last_name,
           email_address: record.email_address,
         });
+        setExistingImage(record.profile_image ? `${UPLOADS_URL}/${record.profile_image}` : '');
         if (record.location) {
           parseLocation(record.location);
         }
@@ -42,6 +46,8 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
         setCities([]);
         setBarangays([]);
       }
+      setProfileImage(null);
+      setImagePreview('');
       setError('');
     }
   }, [isOpen, record]);
@@ -174,16 +180,25 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
     return parts.join(', ');
   };
 
+  const handleImageChange = (e) => {
+    const file = e.target.files[0];
+    setProfileImage(file || null);
+    setImagePreview(file ? URL.createObjectURL(file) : '');
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
     try {
-      const payload = {
-        ...formData,
-        location: buildLocationString() || null,
-      };
+      const payload = new FormData();
+      payload.append('first_name', formData.first_name);
+      payload.append('last_name', formData.last_name);
+      payload.append('email_address', formData.email_address);
+      const location = buildLocationString();
+      if (location) payload.append('location', location);
+      if (profileImage) payload.append('profile_image', profileImage);
 
       if (record) {
         await updateRecord(record.id, payload);
@@ -232,6 +247,23 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
             onChange={(e) => setFormData({ ...formData, email_address: e.target.value })}
             style={styles.input}
             required
+          />
+        </div>
+
+        <div style={styles.inputGroup}>
+          <label style={styles.label}>Profile Image</label>
+          {(imagePreview || existingImage) && (
+            <img
+              src={imagePreview || existingImage}
+              alt="Profile preview"
+              style={styles.imagePreview}
+            />
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleImageChange}
+            style={styles.input}
           />
         </div>
 
@@ -320,6 +352,15 @@ const styles = {
     borderRadius: '4px',
     fontSize: '14px',
     boxSizing: 'border-box',
+  },
+  imagePreview: {
+    display: 'block',
+    width: '80px',
+    height: '80px',
+    objectFit: 'cover',
+    borderRadius: '50%',
+    marginBottom: '8px',
+    border: '1px solid #ddd',
   },
   sectionTitle: {
     fontSize: '14px',

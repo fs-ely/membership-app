@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getRecords, deleteRecord } from '../services/api';
+import { getRecords, deleteRecord, UPLOADS_URL } from '../services/api';
 import RecordFormModal from './RecordFormModal';
 
 const RecordsList = () => {
@@ -98,6 +98,7 @@ const RecordsList = () => {
                   <th style={styles.th}>Last Name</th>
                   <th style={styles.th}>Email</th>
                   <th style={styles.th}>Location</th>
+                  <th style={styles.th}>Profile</th>
                   {isAdmin && <th style={styles.th}>Created By</th>}
                   <th style={{ ...styles.th, textAlign: 'center' }}>Actions</th>
                 </tr>
@@ -109,6 +110,17 @@ const RecordsList = () => {
                     <td style={styles.td}>{record.last_name}</td>
                     <td style={styles.td}>{record.email_address}</td>
                     <td style={{ ...styles.td, fontSize: '12px' }}>{record.location || '-'}</td>
+                    <td style={styles.td}>
+                      {record.profile_image ? (
+                        <img
+                          src={`${UPLOADS_URL}/${record.profile_image}`}
+                          alt={`${record.first_name} ${record.last_name}`}
+                          style={styles.thumbnail}
+                        />
+                      ) : (
+                        '-'
+                      )}
+                    </td>
                     {isAdmin && <td style={styles.td}>{record.created_by_name}</td>}
                     <td style={{ ...styles.td, textAlign: 'center' }}>
                       <button
@@ -233,6 +245,13 @@ const styles = {
     padding: '10px',
     fontSize: '14px',
     color: '#333',
+  },
+  thumbnail: {
+    width: '40px',
+    height: '40px',
+    objectFit: 'cover',
+    borderRadius: '50%',
+    border: '1px solid #ddd',
   },
   editBtn: {
     padding: '5px 10px',

@@ -3,6 +3,8 @@ import axios from 'axios';
 const API_URL = 'http://localhost:5000/api/auth';
 const BASE_URL = 'http://localhost:5000/api';
 
+export const UPLOADS_URL = 'http://localhost:5000/uploads';
+
 const api = axios.create({
   baseURL: API_URL,
   headers: {
