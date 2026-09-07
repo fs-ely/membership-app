@@ -31,12 +31,14 @@ const seed = async () => {
     const seededUserIds = [];
     for (const user of seedUsers) {
       const result = await client.query(
-        `INSERT INTO users (phone, password, name, role)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO users (phone, password, name, role, failed_login_attempts, lockout_until)
+         VALUES ($1, $2, $3, $4, 0, NULL)
          ON CONFLICT (phone) DO UPDATE
            SET password = EXCLUDED.password,
                name = EXCLUDED.name,
-               role = EXCLUDED.role
+               role = EXCLUDED.role,
+               failed_login_attempts = EXCLUDED.failed_login_attempts,
+               lockout_until = EXCLUDED.lockout_until
          RETURNING id, phone, name, role`,
         [user.phone, hashedPassword, user.name, user.role]
       );
@@ -46,7 +48,11 @@ const seed = async () => {
 
     const adminId = seededUserIds[0];
 
+    await client.query('DELETE FROM otps');
     await client.query('DELETE FROM records');
+
+    const seedPhones = seedUsers.map((user) => user.phone);
+    await client.query('DELETE FROM users WHERE phone NOT IN ($1, $2, $3)', seedPhones);
 
     let inserted = 0;
     for (const record of seedRecords) {
