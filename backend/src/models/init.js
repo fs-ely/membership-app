@@ -75,6 +75,24 @@ const createTables = async () => {
       console.log('Added lockout_until column to users table');
     }
 
+    const activeSessionCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'users' AND column_name = 'active_session_token'
+    `);
+    if (activeSessionCheck.rows.length === 0) {
+      await client.query("ALTER TABLE users ADD COLUMN active_session_token TEXT");
+      console.log('Added active_session_token column to users table');
+    }
+
+    const sessionCreatedAtCheck = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'users' AND column_name = 'active_session_created_at'
+    `);
+    if (sessionCreatedAtCheck.rows.length === 0) {
+      await client.query("ALTER TABLE users ADD COLUMN active_session_created_at TIMESTAMP");
+      console.log('Added active_session_created_at column to users table');
+    }
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS records (
         id SERIAL PRIMARY KEY,
