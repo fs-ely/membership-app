@@ -43,6 +43,16 @@ export const verifyOTP = async (userId, otp) => {
   return response.data;
 };
 
+export const forgotPassword = async (phone) => {
+  const response = await api.post('/forgot-password', { phone });
+  return response.data;
+};
+
+export const resetPassword = async (userId, otp, newPassword) => {
+  const response = await api.post('/reset-password', { userId, otp, newPassword });
+  return response.data;
+};
+
 export const getProfile = async () => {
   const response = await api.get('/profile');
   return response.data;

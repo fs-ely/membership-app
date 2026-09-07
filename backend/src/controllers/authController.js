@@ -136,6 +136,94 @@ const verifyOTP = async (req, res) => {
   }
 };
 
+// Forgot password - send reset OTP
+const forgotPassword = async (req, res) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    // Find user
+    const result = await pool.query('SELECT id, phone FROM users WHERE phone = $1', [phone]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No account found with this phone number' });
+    }
+
+    const user = result.rows[0];
+
+    // Generate OTP
+    const otp = generateOTP();
+    const expiryMinutes = parseInt(process.env.OTP_EXPIRY_MINUTES) || 5;
+    const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
+
+    // Save OTP to database
+    await pool.query(
+      'INSERT INTO otps (user_id, otp_code, expires_at) VALUES ($1, $2, $3)',
+      [user.id, otp, expiresAt]
+    );
+
+    // Log OTP to console (simulating SMS)
+    console.log('\n========================================');
+    console.log(`Password reset OTP for ${phone}: ${otp}`);
+    console.log(`Expires at: ${expiresAt}`);
+    console.log('========================================\n');
+
+    res.json({
+      message: 'Password reset OTP sent successfully',
+      userId: user.id,
+      phone: user.phone,
+      hint: 'Check server console for OTP'
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Reset password - verify OTP and update password
+const resetPassword = async (req, res) => {
+  try {
+    const { userId, otp, newPassword } = req.body;
+
+    if (!userId || !otp || !newPassword) {
+      return res.status(400).json({ error: 'User ID, OTP, and new password are required' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+
+    // Find valid OTP
+    const result = await pool.query(
+      `SELECT * FROM otps 
+       WHERE user_id = $1 AND otp_code = $2 AND used = FALSE AND expires_at > NOW()
+       ORDER BY created_at DESC LIMIT 1`,
+      [userId, otp]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid or expired OTP' });
+    }
+
+    // Mark OTP as used
+    await pool.query('UPDATE otps SET used = TRUE WHERE id = $1', [result.rows[0].id]);
+
+    // Hash new password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+    // Update password
+    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, userId]);
+
+    res.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 // Get user profile (protected route)
 const getProfile = async (req, res) => {
   try {
@@ -155,4 +243,4 @@ const getProfile = async (req, res) => {
   }
 };
 
-module.exports = { register, login, verifyOTP, getProfile };
+module.exports = { register, login, verifyOTP, forgotPassword, resetPassword, getProfile };

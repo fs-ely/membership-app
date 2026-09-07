@@ -18,6 +18,7 @@ Built with:
 - Single-use, expiring OTPs (5 minutes, configurable) validated against the database
 - JWT-based authentication guarding protected routes
 - Protected dashboard showing the authenticated user's profile with logout
+- Forgot password flow that sends a reset OTP to the server console
 - Persistent sessions via localStorage token + profile refresh
 
 ## How It Works
@@ -177,6 +178,8 @@ With both terminals running, open `http://localhost:3000` in your browser.
 | POST   | `/api/auth/register`   | Register new user (name, phone, password) | No                 |
 | POST   | `/api/auth/login`      | Login, sends OTP to console               | No                 |
 | POST   | `/api/auth/verify-otp` | Verify OTP, returns JWT for valid access  | No                 |
+| POST   | `/api/auth/forgot-password` | Request password reset OTP (sent to console) | No           |
+| POST   | `/api/auth/reset-password`  | Verify reset OTP and set new password    | No                 |
 | GET    | `/api/auth/profile`    | Get authenticated user profile            | Yes (Bearer token) |
 
 ## Configuration (.env)

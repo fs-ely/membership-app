@@ -83,6 +83,9 @@ out
 dist
 .output
 
+# backend
+backend/uploads/
+
 # frontend
 frontend/build/
 
