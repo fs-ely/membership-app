@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { login } from '../services/api';
+import BrandHeader from './BrandHeader';
 
 const LoginForm = () => {
   const [phone, setPhone] = useState('');
@@ -27,6 +28,8 @@ const LoginForm = () => {
 
   return (
     <div style={styles.container}>
+      <BrandHeader />
+      <div style={styles.body}>
       <div style={styles.card}>
         <h2 style={styles.title}>Login</h2>
         {error && <div style={styles.error}>{error}</div>}
@@ -73,6 +76,7 @@ const LoginForm = () => {
           <strong>Regular</strong> — 09222222222 / Password@123
         </div>
       </div>
+      </div>
     </div>
   );
 };
@@ -81,10 +85,19 @@ const styles = {
   container: {
     display: 'flex',
     flexDirection: 'column',
-    justifyContent: 'center',
     alignItems: 'center',
     minHeight: '100vh',
     backgroundColor: '#f5f5f5',
+  },
+  body: {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexGrow: 1,
+    width: '100%',
+    padding: '40px 20px',
+    boxSizing: 'border-box',
   },
   card: {
     backgroundColor: 'white',
