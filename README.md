@@ -43,12 +43,15 @@ Built with:
 ```
 membership-app/
 ├── backend/
+│   ├── scripts/seed.js              # Seeds demo users and records
 │   ├── src/
 │   │   ├── config/db.js              # PostgreSQL pool
 │   │   ├── controllers/
 │   │   │   ├── authController.js     # register/login/verifyOTP/getProfile/updateProfile
 │   │   │   ├── recordController.js   # CRUD operations for member records
-│   │   │   └── locationController.js # Country/province/city/barangay data
+│   │   │   ├── locationController.js # Country/province/city/barangay data
+│   │   │   └── userController.js     # List all users (admin)
+│   │   ├── data/locations.json       # Philippine location data
 │   │   ├── middleware/
 │   │   │   ├── auth.js               # JWT verification guard
 │   │   │   └── role.js               # Role-based access control
@@ -56,32 +59,39 @@ membership-app/
 │   │   ├── routes/
 │   │   │   ├── auth.js               # /api/auth routes
 │   │   │   ├── records.js            # /api/records routes
-│   │   │   └── locations.js          # /api/locations routes
+│   │   │   ├── locations.js          # /api/locations routes
+│   │   │   └── users.js              # /api/users routes (admin)
 │   │   ├── utils/
 │   │   │   ├── otpGenerator.js       # Cryptographically secure 6-digit OTP
 │   │   │   └── uploads.js            # File upload configuration
 │   │   └── server.js                 # Express app entry point
-│   ├── data/locations.json           # Philippine location data
 │   ├── uploads/                      # Uploaded profile images
-│   ├── .env                          # Environment configuration
+│   ├── .env / .env.example           # Environment configuration
 │   └── package.json
 └── frontend/
-    └── src/
-        ├── components/
-        │   ├── LoginForm.jsx         # Phone + password login
-        │   ├── RegisterForm.jsx      # User registration
-        │   ├── OTPVerification.jsx   # 6-digit OTP entry
-        │   ├── Dashboard.jsx         # User profile & navigation
-        │   ├── RecordsList.jsx       # Member records table
-        │   ├── RecordFormModal.jsx   # Create/edit member form
-        │   ├── EditProfileModal.jsx  # Edit user profile
-        │   ├── ForgotPassword.jsx    # Password reset flow
-        │   ├── Modal.jsx             # Reusable modal component
-        │   └── BrandHeader.jsx       # App header/branding
-        ├── context/AuthContext.jsx   # Auth state + token persistence
-        ├── services/api.js           # Axios client with auth interceptor
-        ├── App.js                    # Routing + protected/public route guards
-        └── index.js
+    ├── build/                        # Production build output
+    ├── public/
+    │   └── index.html
+    ├── src/
+    │   ├── components/
+    │   │   ├── BrandHeader.jsx       # App header/branding
+    │   │   ├── Dashboard.jsx         # User profile & navigation
+    │   │   ├── EditProfileModal.jsx  # Edit user profile
+    │   │   ├── ForgotPassword.jsx    # Password reset flow
+    │   │   ├── LoginForm.jsx         # Phone + password login
+    │   │   ├── Modal.jsx             # Reusable modal component
+    │   │   ├── OtpHint.jsx           # OTP helper hint text
+    │   │   ├── OTPVerification.jsx   # 6-digit OTP entry
+    │   │   ├── RecordFormModal.jsx   # Create/edit member form
+    │   │   ├── RecordsList.jsx       # Member records table
+    │   │   ├── RegisterForm.jsx      # User registration
+    │   │   ├── ResendOtpButton.jsx   # Resend OTP button
+    │   │   └── UserFilterDropdown.jsx# Filter records by user
+    │   ├── context/AuthContext.jsx   # Auth state + token persistence
+    │   ├── pages/
+    │   ├── services/api.js           # Axios client with auth interceptor
+    │   ├── App.js                    # Routing + protected/public route guards
+    │   └── index.js
 ```
 
 ## Prerequisites
@@ -244,6 +254,11 @@ With both terminals running, open `http://localhost:3000` in your browser.
 | GET    | `/api/locations/provinces/:countryId` | Get provinces by country     | No                 |
 | GET    | `/api/locations/cities/:provinceId` | Get cities by province         | No                 |
 | GET    | `/api/locations/barangays/:cityId` | Get barangays by city           | No                 |
+
+### Users
+| Method | Endpoint               | Description                               | Auth               |
+| ------ | ---------------------- | ----------------------------------------- | ------------------ |
+| GET    | `/api/users`           | Get list of all users (admin only)        | Yes (Bearer token, admin) |
 
 ## Configuration (.env)
 
