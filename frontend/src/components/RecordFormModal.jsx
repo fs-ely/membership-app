@@ -217,12 +217,13 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={isEdit ? 'Edit Record' : 'Create Record'}>
-      {error && <div style={styles.error}>{error}</div>}
-      <form onSubmit={handleSubmit}>
+      {error && <div data-test="record-form-error-message" style={styles.error}>{error}</div>}
+      <form data-test="record-form" onSubmit={handleSubmit}>
         <div style={styles.inputGroup}>
           <label style={styles.label}>First Name *</label>
           <input
             type="text"
+            data-test="record-form-first-name-input"
             value={formData.first_name}
             onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
             style={styles.input}
@@ -233,6 +234,7 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
           <label style={styles.label}>Last Name *</label>
           <input
             type="text"
+            data-test="record-form-last-name-input"
             value={formData.last_name}
             onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
             style={styles.input}
@@ -243,6 +245,7 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
           <label style={styles.label}>Email Address *</label>
           <input
             type="email"
+            data-test="record-form-email-input"
             value={formData.email_address}
             onChange={(e) => setFormData({ ...formData, email_address: e.target.value })}
             style={styles.input}
@@ -256,12 +259,14 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
             <img
               src={imagePreview || existingImage}
               alt="Profile preview"
+              data-test="record-form-image-preview"
               style={styles.imagePreview}
             />
           )}
           <input
             type="file"
             accept="image/*"
+            data-test="record-form-image-input"
             onChange={handleImageChange}
             style={styles.input}
           />
@@ -271,7 +276,7 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
 
         <div style={styles.inputGroup}>
           <label style={styles.label}>Country</label>
-          <select value={selectedCountry} onChange={handleCountryChange} style={styles.input}>
+          <select value={selectedCountry} onChange={handleCountryChange} style={styles.input} data-test="record-form-country-select">
             <option value="">Select Country</option>
             {countries.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
@@ -285,6 +290,7 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
             value={selectedProvince}
             onChange={handleProvinceChange}
             style={styles.input}
+            data-test="record-form-province-select"
             disabled={!selectedCountry || loadingLocations}
           >
             <option value="">Select Province</option>
@@ -300,6 +306,7 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
             value={selectedCity}
             onChange={handleCityChange}
             style={styles.input}
+            data-test="record-form-city-select"
             disabled={!selectedProvince || loadingLocations}
           >
             <option value="">Select City</option>
@@ -315,6 +322,7 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
             value={selectedBarangay}
             onChange={(e) => setSelectedBarangay(e.target.value)}
             style={styles.input}
+            data-test="record-form-barangay-select"
             disabled={!selectedCity || loadingLocations}
           >
             <option value="">Select Barangay</option>
@@ -325,8 +333,8 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
         </div>
 
         <div style={styles.buttonGroup}>
-          <button type="button" onClick={onClose} style={styles.cancelBtn}>Cancel</button>
-          <button type="submit" style={styles.submitBtn} disabled={loading}>
+          <button type="button" data-test="record-form-cancel-button" onClick={onClose} style={styles.cancelBtn}>Cancel</button>
+          <button type="submit" data-test="record-form-submit-button" style={styles.submitBtn} disabled={loading}>
             {loading ? 'Saving...' : (isEdit ? 'Update' : 'Create')}
           </button>
         </div>

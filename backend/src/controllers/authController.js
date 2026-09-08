@@ -157,7 +157,8 @@ const login = async (req, res) => {
       message: 'OTP sent successfully',
       userId: user.id,
       phone: user.phone,
-      hint: 'Check server console for OTP'
+      otp,
+      expiresAt: expiresAt.toISOString()
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -255,7 +256,8 @@ const forgotPassword = async (req, res) => {
       message: 'Password reset OTP sent successfully',
       userId: user.id,
       phone: user.phone,
-      hint: 'Check server console for OTP'
+      otp,
+      expiresAt: expiresAt.toISOString()
     });
   } catch (error) {
     console.error('Forgot password error:', error);
@@ -394,4 +396,50 @@ const logout = async (req, res) => {
   }
 };
 
-module.exports = { register, login, verifyOTP, forgotPassword, resetPassword, logout, getProfile, updateProfile };
+// Resend OTP
+const resendOTP = async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    const userResult = await pool.query('SELECT id, phone FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userResult.rows[0];
+
+    // Generate new OTP
+    const otp = generateOTP();
+    const expiryMinutes = parseInt(process.env.OTP_EXPIRY_MINUTES) || 5;
+    const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
+
+    // Save OTP to database
+    await pool.query(
+      'INSERT INTO otps (user_id, otp_code, expires_at) VALUES ($1, $2, $3)',
+      [user.id, otp, expiresAt]
+    );
+
+    // Log OTP to console (simulating SMS)
+    console.log('\n========================================');
+    console.log(`Resent OTP for ${user.phone}: ${otp}`);
+    console.log(`Expires at: ${expiresAt}`);
+    console.log('========================================\n');
+
+    res.json({
+      message: 'OTP resent successfully',
+      userId: user.id,
+      phone: user.phone,
+      otp,
+      expiresAt: expiresAt.toISOString()
+    });
+  } catch (error) {
+    console.error('Resend OTP error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+module.exports = { register, login, verifyOTP, forgotPassword, resetPassword, logout, resendOTP, getProfile, updateProfile };

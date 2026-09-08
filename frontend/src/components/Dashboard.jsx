@@ -27,37 +27,37 @@ const Dashboard = () => {
       <BrandHeader />
       <div style={styles.body}>
       <div style={styles.card}>
-        <h2 style={styles.title}>Dashboard</h2>
+        <h2 data-test="dashboard-title" style={styles.title}>Dashboard</h2>
         <div style={styles.profileSection}>
           {avatarSrc ? (
-            <img src={avatarSrc} alt="Profile" style={styles.avatarImage} />
+            <img src={avatarSrc} alt="Profile" data-test="dashboard-avatar-image" style={styles.avatarImage} />
           ) : (
-            <div style={styles.avatar}>
+            <div data-test="dashboard-avatar-initial" style={styles.avatar}>
               {user.name?.charAt(0).toUpperCase()}
             </div>
           )}
-          <h3 style={styles.name}>
+          <h3 data-test="dashboard-user-name" style={styles.name}>
             {user.name}
-            <span style={isAdmin ? styles.adminBadge : styles.regularBadge}>
+            <span data-test="dashboard-role-badge" style={isAdmin ? styles.adminBadge : styles.regularBadge}>
               {isAdmin ? 'Admin' : 'Regular'}
             </span>
           </h3>
-          <p style={styles.phone}>{user.phone}</p>
+          <p data-test="dashboard-user-phone" style={styles.phone}>{user.phone}</p>
           <p style={styles.memberSince}>
             Member since: {new Date(user.created_at).toLocaleDateString()}
           </p>
         </div>
-        <div style={styles.successMessage}>
+        <div data-test="dashboard-success-message" style={styles.successMessage}>
           You have successfully authenticated with OTP/2FA!
         </div>
         <div style={styles.actions}>
-          <button onClick={() => navigate('/records')} style={styles.recordsButton}>
+          <button data-test="manage-records-button" onClick={() => navigate('/records')} style={styles.recordsButton}>
             Manage Records
           </button>
-          <button onClick={() => setEditModalOpen(true)} style={styles.editButton} data-test="edit-profile-button">
+          <button onClick={() => setEditModalOpen(true)} style={styles.editButton} data-test="dashboard-edit-profile-button">
             Edit Profile
           </button>
-          <button onClick={handleLogout} style={styles.logoutButton}>
+          <button data-test="logout-button" onClick={handleLogout} style={styles.logoutButton}>
             Logout
           </button>
         </div>

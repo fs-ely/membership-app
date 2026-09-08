@@ -1,31 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { verifyOTP } from '../services/api';
+import { verifyOTP, resendOTP } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import BrandHeader from './BrandHeader';
+import OtpHint from './OtpHint';
+import ResendOtpButton from './ResendOtpButton';
 
 const OTPVerification = () => {
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [timer, setTimer] = useState(30);
   const location = useLocation();
   const navigate = useNavigate();
   const { loginUser } = useAuth();
 
-  const { userId, phone } = location.state || {};
+  const { userId, phone, otp: initialOtp, expiresAt: initialExpiresAt } = location.state || {};
+  const [otpCode, setOtpCode] = useState(initialOtp);
+  const [expiresAt, setExpiresAt] = useState(initialExpiresAt);
 
   useEffect(() => {
     if (!userId || !phone) {
       navigate('/login');
-      return;
     }
-
-    const interval = setInterval(() => {
-      setTimer((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-
-    return () => clearInterval(interval);
   }, [userId, phone, navigate]);
 
   const handleChange = (index, value) => {
@@ -53,6 +49,18 @@ const OTPVerification = () => {
     const newOtp = pastedData.split('').concat(Array(6).fill('')).slice(0, 6);
     setOtp(newOtp);
     document.getElementById(`otp-${Math.min(pastedData.length, 5)}`)?.focus();
+  };
+
+  const handleResend = async () => {
+    setError('');
+    try {
+      const data = await resendOTP(userId);
+      setOtpCode(data.otp);
+      setExpiresAt(data.expiresAt);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to resend OTP');
+      throw err;
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -83,20 +91,19 @@ const OTPVerification = () => {
       <BrandHeader />
       <div style={styles.body}>
       <div style={styles.card}>
-        <h2 style={styles.title}>Verify OTP</h2>
+        <h2 data-test="otp-title" style={styles.title}>Verify OTP</h2>
         <p style={styles.subtitle}>
           Enter the 6-digit code sent to <strong>{phone}</strong>
         </p>
-        <p style={styles.hint}>
-          Check the server console for the OTP
-        </p>
-        {error && <div style={styles.error}>{error}</div>}
-        <form onSubmit={handleSubmit}>
+        <OtpHint otpCode={otpCode} expiresAt={expiresAt} />
+        {error && <div data-test="otp-error-message" style={styles.error}>{error}</div>}
+        <form data-test="otp-form" onSubmit={handleSubmit}>
           <div style={styles.otpContainer}>
             {otp.map((digit, index) => (
               <input
                 key={index}
                 id={`otp-${index}`}
+                data-test={`otp-digit-input-${index}`}
                 type="text"
                 inputMode="numeric"
                 maxLength={1}
@@ -108,13 +115,11 @@ const OTPVerification = () => {
               />
             ))}
           </div>
-          <button type="submit" style={styles.button} disabled={loading}>
+          <button type="submit" data-test="otp-verify-button" style={styles.button} disabled={loading}>
             {loading ? 'Verifying...' : 'Verify OTP'}
           </button>
         </form>
-        <p style={styles.timer}>
-          {timer > 0 ? `Resend OTP in ${timer}s` : 'OTP may have expired'}
-        </p>
+        <ResendOtpButton onResend={handleResend} />
       </div>
       </div>
     </div>
@@ -154,11 +159,6 @@ const styles = {
   },
   subtitle: {
     color: '#666',
-    marginBottom: '10px',
-  },
-  hint: {
-    color: '#007bff',
-    fontSize: '12px',
     marginBottom: '20px',
   },
   otpContainer: {
@@ -192,11 +192,6 @@ const styles = {
     padding: '10px',
     borderRadius: '4px',
     marginBottom: '20px',
-  },
-  timer: {
-    marginTop: '20px',
-    color: '#666',
-    fontSize: '14px',
   },
 };
 
