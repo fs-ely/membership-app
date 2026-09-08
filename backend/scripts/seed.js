@@ -11,12 +11,16 @@ const seedUsers = [
 ];
 
 const seedRecords = [
-  { first_name: 'Andres', last_name: 'Bonifacio', email_address: 'andres.bonifacio@example.com', location: 'Philippines, Metro Manila, Manila' },
-  { first_name: 'Jose', last_name: 'Rizal', email_address: 'jose.rizal@example.com', location: 'Philippines, Metro Manila, Makati' },
-  { first_name: 'Gabriela', last_name: 'Silang', email_address: 'gabriela.silang@example.com', location: 'Philippines, Cebu, Cebu City' },
-  { first_name: 'Lapu', last_name: 'Lapu', email_address: 'lapu.lapu@example.com', location: 'Philippines, Cebu, Lapu-Lapu' },
-  { first_name: 'Melchora', last_name: 'Aquino', email_address: 'melchora.aquino@example.com', location: 'Philippines, Metro Manila, Quezon City' },
-  { first_name: 'Antonio', last_name: 'Luna', email_address: 'antonio.luna@example.com', location: 'Philippines, La Union, San Fernando' }
+  { created_by: 'System Administrator', first_name: 'Andres', last_name: 'Bonifacio', email_address: 'andres.bonifacio@example.com', location: 'Philippines, Metro Manila, Manila' },
+  { created_by: 'System Administrator', first_name: 'Jose', last_name: 'Rizal', email_address: 'jose.rizal@example.com', location: 'Philippines, Metro Manila, Makati' },
+  { created_by: 'Maria Santos', first_name: 'Gabriela', last_name: 'Silang', email_address: 'gabriela.silang@example.com', location: 'Philippines, Cebu, Cebu City' },
+  { created_by: 'Juan Dela Cruz', first_name: 'Lapu', last_name: 'Lapu', email_address: 'lapu.lapu@example.com', location: 'Philippines, Cebu, Lapu-Lapu' },
+  { created_by: 'System Administrator', first_name: 'Melchora', last_name: 'Aquino', email_address: 'melchora.aquino@example.com', location: 'Philippines, Metro Manila, Quezon City' },
+  { created_by: 'Juan Dela Cruz', first_name: 'Antonio', last_name: 'Luna', email_address: 'antonio.luna@example.com', location: 'Philippines, La Union, San Fernando' },
+  { created_by: 'Maria Santos', first_name: 'Josefa', last_name: 'Llanes Escoda', email_address: 'josefa.escola@example.com', location: 'Philippines, Metro Manila, Manila' },
+  { created_by: 'Juan Dela Cruz', first_name: 'Emilio', last_name: 'Jacinto', email_address: 'emilio.jacinto@example.com', location: 'Philippines, Laguna, Lumban' },
+  { created_by: 'Maria Santos', first_name: 'Gregoria', last_name: 'de Jesus', email_address: 'gregoria.dejesus@example.com', location: 'Philippines, Metro Manila, Caloocan' },
+  { created_by: 'System Administrator', first_name: 'Apolinario', last_name: 'Mabini', email_address: 'apolinario.mabini@example.com', location: 'Philippines, Batangas, Tanauan' }
 ];
 
 const seed = async () => {
@@ -46,8 +50,6 @@ const seed = async () => {
       console.log(`Upserted user: ${result.rows[0].phone} (${result.rows[0].name}, ${result.rows[0].role})`);
     }
 
-    const adminId = seededUserIds[0];
-
     await client.query('DELETE FROM otps');
     await client.query('DELETE FROM records');
 
@@ -56,16 +58,17 @@ const seed = async () => {
 
     let inserted = 0;
     for (const record of seedRecords) {
+      const ownerId = seededUserIds[seedUsers.findIndex((user) => user.name === record.created_by)];
       await client.query(
         `INSERT INTO records (user_id, first_name, last_name, email_address, location)
          VALUES ($1, $2, $3, $4, $5)`,
-        [adminId, record.first_name, record.last_name, record.email_address, record.location]
+        [ownerId, record.first_name, record.last_name, record.email_address, record.location]
       );
       inserted++;
     }
 
     await client.query('COMMIT');
-    console.log(`Seeded ${inserted} records created by admin ${adminId}`);
+    console.log(`Seeded ${inserted} records created by seeded users`);
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Seed failed:', error);
