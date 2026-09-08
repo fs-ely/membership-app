@@ -82,6 +82,11 @@ export const verifyOTP = async (userId, otp) => {
   return response.data;
 };
 
+export const resendOTP = async (userId) => {
+  const response = await api.post('/resend-otp', { userId });
+  return response.data;
+};
+
 export const forgotPassword = async (phone) => {
   const response = await api.post('/forgot-password', { phone });
   return response.data;
@@ -111,10 +116,15 @@ export const logoutApi = async () => {
 };
 
 // Records
-export const getRecords = async () => {
+export const getRecords = async (search, searchBy, userIds) => {
   const token = localStorage.getItem('token');
+  const params = {};
+  if (search) params.search = search;
+  if (searchBy) params.searchBy = searchBy;
+  if (userIds && userIds.length > 0) params.user_ids = userIds.join(',');
   const response = await axios.get(`${BASE_URL}/records`, {
     headers: { Authorization: `Bearer ${token}` },
+    params,
   });
   return response.data;
 };
@@ -122,6 +132,15 @@ export const getRecords = async () => {
 export const getRecord = async (id) => {
   const token = localStorage.getItem('token');
   const response = await axios.get(`${BASE_URL}/records/${id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return response.data;
+};
+
+// Users (admin only)
+export const getUsers = async () => {
+  const token = localStorage.getItem('token');
+  const response = await axios.get(`${BASE_URL}/users`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   return response.data;

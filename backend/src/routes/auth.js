@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { register, login, verifyOTP, forgotPassword, resetPassword, logout, getProfile, updateProfile } = require('../controllers/authController');
+const { register, login, verifyOTP, forgotPassword, resetPassword, logout, resendOTP, getProfile, updateProfile } = require('../controllers/authController');
 const authMiddleware = require('../middleware/auth');
 const { upload } = require('../utils/uploads');
 
@@ -8,6 +8,7 @@ const { upload } = require('../utils/uploads');
 router.post('/register', register);
 router.post('/login', login);
 router.post('/verify-otp', verifyOTP);
+router.post('/resend-otp', resendOTP);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
 

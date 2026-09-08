@@ -5,6 +5,7 @@ require('dotenv').config();
 const authRoutes = require('./routes/auth');
 const recordRoutes = require('./routes/records');
 const locationRoutes = require('./routes/locations');
+const userRoutes = require('./routes/users');
 const createTables = require('./models/init');
 const multer = require('multer');
 const path = require('path');
@@ -21,6 +22,7 @@ app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 app.use('/api/auth', authRoutes);
 app.use('/api/records', recordRoutes);
 app.use('/api/locations', locationRoutes);
+app.use('/api/users', userRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

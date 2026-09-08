@@ -26,10 +26,10 @@ const Modal = ({ isOpen, onClose, title, children }) => {
 
   return (
     <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+      <div data-test="modal" style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
-          <h2 style={styles.title}>{title}</h2>
-          <button style={styles.closeBtn} onClick={onClose}>&times;</button>
+          <h2 data-test="modal-title" style={styles.title}>{title}</h2>
+          <button data-test="modal-close-button" style={styles.closeBtn} onClick={onClose}>&times;</button>
         </div>
         <div style={styles.body}>{children}</div>
       </div>

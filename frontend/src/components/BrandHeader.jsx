@@ -3,7 +3,7 @@ import React from 'react';
 const BrandHeader = () => {
   return (
     <header style={styles.header}>
-      <h1 style={styles.title}>JasaSane Corp</h1>
+      <h1 data-test="brand-header-title" style={styles.title}>JasaSane Corp</h1>
     </header>
   );
 };

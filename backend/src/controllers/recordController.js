@@ -15,24 +15,48 @@ const removeFile = (filename) => {
 
 const getAllRecords = async (req, res) => {
   try {
-    let result;
-    if (req.user.role === 'admin') {
-      result = await pool.query(
-        `SELECT r.*, u.name as created_by_name 
-         FROM records r 
-         JOIN users u ON r.user_id = u.id 
-         ORDER BY r.created_at DESC`
-      );
-    } else {
-      result = await pool.query(
-        `SELECT r.*, u.name as created_by_name 
-         FROM records r 
-         JOIN users u ON r.user_id = u.id 
-         WHERE r.user_id = $1 
-         ORDER BY r.created_at DESC`,
-        [req.user.userId]
-      );
+    const { search, searchBy, user_ids } = req.query;
+    const hasSearch = search && search.trim() !== '';
+    const searchTerm = hasSearch ? `%${search.trim()}%` : null;
+    const isAdmin = req.user.role === 'admin';
+    const searchByName = searchBy === 'name';
+
+    const conditions = [];
+    const params = [];
+
+    if (!isAdmin) {
+      params.push(req.user.userId);
+      conditions.push(`r.user_id = $${params.length}`);
     }
+
+    if (isAdmin && user_ids) {
+      const ids = user_ids.split(',').map((s) => s.trim()).filter(Boolean).map(Number).filter(Number.isInteger);
+      if (ids.length > 0) {
+        params.push(ids);
+        conditions.push(`r.user_id = ANY($${params.length}::int[])`);
+      }
+    }
+
+    if (hasSearch) {
+      params.push(searchTerm);
+      const idx = params.length;
+      const searchCondition = searchByName
+        ? `(r.first_name ILIKE $${idx} OR r.last_name ILIKE $${idx} OR CONCAT(r.first_name, ' ', r.last_name) ILIKE $${idx})`
+        : `r.email_address ILIKE $${idx}`;
+      conditions.push(searchCondition);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const result = await pool.query(
+      `SELECT r.*, u.name as created_by_name 
+       FROM records r 
+       JOIN users u ON r.user_id = u.id 
+       ${whereClause} 
+       ORDER BY r.created_at DESC`,
+      params
+    );
+
     res.json({ records: result.rows });
   } catch (error) {
     console.error('Get records error:', error);

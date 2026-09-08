@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { forgotPassword, resetPassword } from '../services/api';
+import { forgotPassword, resetPassword, resendOTP } from '../services/api';
 import BrandHeader from './BrandHeader';
+import OtpHint from './OtpHint';
+import ResendOtpButton from './ResendOtpButton';
 
 const ForgotPassword = () => {
   const [step, setStep] = useState(1);
   const [phone, setPhone] = useState('');
   const [userId, setUserId] = useState(null);
+  const [otpCode, setOtpCode] = useState(null);
+  const [expiresAt, setExpiresAt] = useState(null);
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState('');
@@ -21,11 +25,25 @@ const ForgotPassword = () => {
     try {
       const data = await forgotPassword(phone);
       setUserId(data.userId);
+      setOtpCode(data.otp);
+      setExpiresAt(data.expiresAt);
       setStep(2);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to send OTP');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResend = async () => {
+    setError('');
+    try {
+      const data = await resendOTP(userId);
+      setOtpCode(data.otp);
+      setExpiresAt(data.expiresAt);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to resend OTP');
+      throw err;
     }
   };
 
@@ -82,18 +100,19 @@ const ForgotPassword = () => {
       <BrandHeader />
       <div style={styles.body}>
         <div style={styles.card}>
-          <h2 style={styles.title}>Forgot Password</h2>
+          <h2 data-test="forgot-password-title" style={styles.title}>Forgot Password</h2>
           {step === 1 ? (
             <>
               <p style={styles.subtitle}>
                 Enter your registered phone number to receive a password reset code.
               </p>
-              {error && <div style={styles.error}>{error}</div>}
-              <form onSubmit={handleSendOtp}>
+              {error && <div data-test="forgot-password-error-message" style={styles.error}>{error}</div>}
+              <form data-test="forgot-password-send-form" onSubmit={handleSendOtp}>
                 <div style={styles.inputGroup}>
                   <label style={styles.label}>Phone Number</label>
                   <input
                     type="tel"
+                    data-test="forgot-password-phone-input"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="+1234567890"
@@ -101,7 +120,7 @@ const ForgotPassword = () => {
                     required
                   />
                 </div>
-                <button type="submit" style={styles.button} disabled={loading}>
+                <button type="submit" data-test="forgot-password-send-button" style={styles.button} disabled={loading}>
                   {loading ? 'Sending OTP...' : 'Send OTP'}
                 </button>
               </form>
@@ -111,16 +130,15 @@ const ForgotPassword = () => {
               <p style={styles.subtitle}>
                 Enter the 6-digit code and your new password.
               </p>
-              <p style={styles.hint}>
-                Check the server console for the OTP
-              </p>
-              {error && <div style={styles.error}>{error}</div>}
-              <form onSubmit={handleResetPassword}>
+              <OtpHint otpCode={otpCode} expiresAt={expiresAt} />
+              {error && <div data-test="forgot-password-error-message" style={styles.error}>{error}</div>}
+              <form data-test="forgot-password-reset-form" onSubmit={handleResetPassword}>
                 <div style={styles.otpContainer}>
                   {otp.map((digit, index) => (
                     <input
                       key={index}
                       id={`fp-otp-${index}`}
+                      data-test={`forgot-password-otp-input-${index}`}
                       type="text"
                       inputMode="numeric"
                       maxLength={1}
@@ -136,6 +154,7 @@ const ForgotPassword = () => {
                   <label style={styles.label}>New Password</label>
                   <input
                     type="password"
+                    data-test="forgot-password-new-password-input"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder="Enter a new password"
@@ -144,14 +163,15 @@ const ForgotPassword = () => {
                     minLength={6}
                   />
                 </div>
-                <button type="submit" style={styles.button} disabled={loading}>
+                <button type="submit" data-test="forgot-password-reset-button" style={styles.button} disabled={loading}>
                   {loading ? 'Resetting...' : 'Reset Password'}
                 </button>
               </form>
+              <ResendOtpButton onResend={handleResend} />
             </>
           )}
           <p style={styles.link}>
-            <Link to="/login">Back to Login</Link>
+            <Link data-test="forgot-password-back-link" to="/login">Back to Login</Link>
           </p>
         </div>
       </div>
@@ -194,11 +214,6 @@ const styles = {
     color: '#666',
     marginBottom: '20px',
     fontSize: '14px',
-  },
-  hint: {
-    color: '#007bff',
-    fontSize: '12px',
-    marginBottom: '20px',
   },
   inputGroup: {
     marginBottom: '20px',

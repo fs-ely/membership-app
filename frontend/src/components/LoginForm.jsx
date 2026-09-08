@@ -17,8 +17,9 @@ const LoginForm = () => {
 
     try {
       const data = await login(phone, password);
-      // Navigate to OTP verification with userId and phone
-      navigate('/verify-otp', { state: { userId: data.userId, phone: data.phone } });
+      navigate('/verify-otp', {
+        state: { userId: data.userId, phone: data.phone, otp: data.otp, expiresAt: data.expiresAt }
+      });
     } catch (err) {
       setError(err.response?.data?.error || 'Login failed');
     } finally {
@@ -31,13 +32,14 @@ const LoginForm = () => {
       <BrandHeader />
       <div style={styles.body}>
       <div style={styles.card}>
-        <h2 style={styles.title}>Login</h2>
-        {error && <div style={styles.error}>{error}</div>}
-        <form onSubmit={handleSubmit}>
+        <h2 data-test="login-title" style={styles.title}>Login</h2>
+        {error && <div data-test="login-error-message" style={styles.error}>{error}</div>}
+        <form data-test="login-form" onSubmit={handleSubmit}>
           <div style={styles.inputGroup}>
             <label style={styles.label}>Phone Number</label>
             <input
               type="tel"
+              data-test="login-phone-input"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="+1234567890"
@@ -49,6 +51,7 @@ const LoginForm = () => {
             <label style={styles.label}>Password</label>
             <input
               type="password"
+              data-test="login-password-input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter your password"
@@ -56,14 +59,14 @@ const LoginForm = () => {
               required
             />
           </div>
-          <button type="submit" style={styles.button} disabled={loading}>
+          <button type="submit" data-test="login-submit-button" style={styles.button} disabled={loading}>
             {loading ? 'Sending OTP...' : 'Login'}
           </button>
         </form>
         <p style={styles.link}>
-          Don't have an account? <Link to="/register">Register</Link>
+          Don't have an account? <Link data-test="register-link" to="/register">Register</Link>
           &nbsp;|&nbsp;
-          <Link to="/forgot-password">Forgot password?</Link>
+          <Link data-test="forgot-password-link" to="/forgot-password">Forgot password?</Link>
         </p>
       </div>
       <div style={styles.accountsBox}>

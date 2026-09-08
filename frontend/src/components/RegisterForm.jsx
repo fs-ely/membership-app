@@ -31,13 +31,14 @@ const RegisterForm = () => {
       <BrandHeader />
       <div style={styles.body}>
       <div style={styles.card}>
-        <h2 style={styles.title}>Register</h2>
-        {error && <div style={styles.error}>{error}</div>}
-        <form onSubmit={handleSubmit}>
+        <h2 data-test="register-title" style={styles.title}>Register</h2>
+        {error && <div data-test="register-error-message" style={styles.error}>{error}</div>}
+        <form data-test="register-form" onSubmit={handleSubmit}>
           <div style={styles.inputGroup}>
             <label style={styles.label}>Full Name</label>
             <input
               type="text"
+              data-test="register-name-input"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="John Doe"
@@ -49,6 +50,7 @@ const RegisterForm = () => {
             <label style={styles.label}>Phone Number</label>
             <input
               type="tel"
+              data-test="register-phone-input"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="+1234567890"
@@ -60,6 +62,7 @@ const RegisterForm = () => {
             <label style={styles.label}>Password</label>
             <input
               type="password"
+              data-test="register-password-input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Create a password"
@@ -68,12 +71,12 @@ const RegisterForm = () => {
               minLength={6}
             />
           </div>
-          <button type="submit" style={styles.button} disabled={loading}>
+          <button type="submit" data-test="register-submit-button" style={styles.button} disabled={loading}>
             {loading ? 'Registering...' : 'Register'}
           </button>
         </form>
         <p style={styles.link}>
-          Already have an account? <Link to="/login">Login</Link>
+          Already have an account? <Link data-test="login-link" to="/login">Login</Link>
         </p>
       </div>
       </div>
