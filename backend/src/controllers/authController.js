@@ -141,6 +141,12 @@ const login = async (req, res) => {
     const expiryMinutes = parseInt(process.env.OTP_EXPIRY_MINUTES) || 5;
     const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
 
+    // Invalidate previous unused OTPs for this user
+    await pool.query(
+      'UPDATE otps SET used = TRUE WHERE user_id = $1 AND used = FALSE',
+      [user.id]
+    );
+
     // Save OTP to database
     await pool.query(
       'INSERT INTO otps (user_id, otp_code, expires_at) VALUES ($1, $2, $3)',
@@ -239,6 +245,12 @@ const forgotPassword = async (req, res) => {
     const otp = generateOTP();
     const expiryMinutes = parseInt(process.env.OTP_EXPIRY_MINUTES) || 5;
     const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
+
+    // Invalidate previous unused OTPs for this user
+    await pool.query(
+      'UPDATE otps SET used = TRUE WHERE user_id = $1 AND used = FALSE',
+      [user.id]
+    );
 
     // Save OTP to database
     await pool.query(
@@ -416,6 +428,12 @@ const resendOTP = async (req, res) => {
     const otp = generateOTP();
     const expiryMinutes = parseInt(process.env.OTP_EXPIRY_MINUTES) || 5;
     const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000);
+
+    // Invalidate previous unused OTPs for this user
+    await pool.query(
+      'UPDATE otps SET used = TRUE WHERE user_id = $1 AND used = FALSE',
+      [user.id]
+    );
 
     // Save OTP to database
     await pool.query(
