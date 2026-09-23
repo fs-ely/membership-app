@@ -59,9 +59,18 @@ const RecordsList = () => {
   const hasFilter = debouncedTerm !== '' || selectedUserIds.length > 0;
 
   const handleToggleUser = (id) => {
-    setSelectedUserIds((prev) =>
-      prev.includes(id) ? prev.filter((uid) => uid !== id) : [...prev, id]
-    );
+    setSelectedUserIds((prev) => {
+      if (!prev.includes(id)) return [...prev, id];
+      const userName = users.find((u) => u.id === id)?.name;
+      return prev.filter((uid) => {
+        if (uid === id) return false;
+        if (userName) {
+          const other = users.find((u) => u.id === uid);
+          if (other && other.name === userName) return false;
+        }
+        return true;
+      });
+    });
   };
 
   const handleClearFilters = () => {
