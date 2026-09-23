@@ -122,6 +122,7 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
   const handleProvinceChange = async (e) => {
     const provinceId = e.target.value;
     setSelectedProvince(provinceId);
+    if (record) return;
     setSelectedCity('');
     setSelectedBarangay('');
     setBarangays([]);
@@ -143,6 +144,7 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
   const handleCityChange = async (e) => {
     const cityId = e.target.value;
     setSelectedCity(cityId);
+    if (record) return;
     setSelectedBarangay('');
     if (cityId) {
       setLoadingLocations(true);
