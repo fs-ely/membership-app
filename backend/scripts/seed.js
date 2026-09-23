@@ -11,16 +11,16 @@ const seedUsers = [
 ];
 
 const seedRecords = [
-  { created_by: 'System Administrator', first_name: 'Andres', last_name: 'Bonifacio', email_address: 'andres.bonifacio@example.com', location: 'Philippines, Metro Manila, Manila' },
-  { created_by: 'System Administrator', first_name: 'Jose', last_name: 'Rizal', email_address: 'jose.rizal@example.com', location: 'Philippines, Metro Manila, Makati' },
-  { created_by: 'Maria Santos', first_name: 'Gabriela', last_name: 'Silang', email_address: 'gabriela.silang@example.com', location: 'Philippines, Cebu, Cebu City' },
-  { created_by: 'Juan Dela Cruz', first_name: 'Lapu', last_name: 'Lapu', email_address: 'lapu.lapu@example.com', location: 'Philippines, Cebu, Lapu-Lapu' },
-  { created_by: 'System Administrator', first_name: 'Melchora', last_name: 'Aquino', email_address: 'melchora.aquino@example.com', location: 'Philippines, Metro Manila, Quezon City' },
-  { created_by: 'Juan Dela Cruz', first_name: 'Antonio', last_name: 'Luna', email_address: 'antonio.luna@example.com', location: 'Philippines, La Union, San Fernando' },
-  { created_by: 'Maria Santos', first_name: 'Josefa', last_name: 'Llanes Escoda', email_address: 'josefa.escola@example.com', location: 'Philippines, Metro Manila, Manila' },
-  { created_by: 'Juan Dela Cruz', first_name: 'Emilio', last_name: 'Jacinto', email_address: 'emilio.jacinto@example.com', location: 'Philippines, Laguna, Lumban' },
-  { created_by: 'Maria Santos', first_name: 'Gregoria', last_name: 'de Jesus', email_address: 'gregoria.dejesus@example.com', location: 'Philippines, Metro Manila, Caloocan' },
-  { created_by: 'System Administrator', first_name: 'Apolinario', last_name: 'Mabini', email_address: 'apolinario.mabini@example.com', location: 'Philippines, Batangas, Tanauan' }
+  { created_by: 'System Administrator', first_name: 'Andres', last_name: 'Bonifacio', email_address: 'andres.bonifacio@example.com', location: 'Barangay 1, Manila, Metro Manila, Philippines' },
+  { created_by: 'System Administrator', first_name: 'Jose', last_name: 'Rizal', email_address: 'jose.rizal@example.com', location: 'Bel-Air, Makati City, Metro Manila, Philippines' },
+  { created_by: 'Maria Santos', first_name: 'Gabriela', last_name: 'Silang', email_address: 'gabriela.silang@example.com', location: 'Lahug, Cebu City, Cebu, Philippines' },
+  { created_by: 'Juan Dela Cruz', first_name: 'Lapu', last_name: 'Lapu', email_address: 'lapu.lapu@example.com', location: 'Pusok, Lapu-Lapu City, Cebu, Philippines' },
+  { created_by: 'System Administrator', first_name: 'Melchora', last_name: 'Aquino', email_address: 'melchora.aquino@example.com', location: 'Aurora, Quezon City, Metro Manila, Philippines' },
+  { created_by: 'Juan Dela Cruz', first_name: 'Antonio', last_name: 'Luna', email_address: 'antonio.luna@example.com', location: 'Bangbangolan, San Fernando City, La Union, Philippines' },
+  { created_by: 'Maria Santos', first_name: 'Josefa', last_name: 'Llanes Escoda', email_address: 'josefa.escola@example.com', location: 'Barangay 100, Manila, Metro Manila, Philippines' },
+  { created_by: 'Juan Dela Cruz', first_name: 'Emilio', last_name: 'Jacinto', email_address: 'emilio.jacinto@example.com', location: 'Lewin, Lumban, Laguna, Philippines' },
+  { created_by: 'Maria Santos', first_name: 'Gregoria', last_name: 'de Jesus', email_address: 'gregoria.dejesus@example.com', location: 'Barangay 1, Caloocan City, Metro Manila, Philippines' },
+  { created_by: 'System Administrator', first_name: 'Apolinario', last_name: 'Mabini', email_address: 'apolinario.mabini@example.com', location: 'Ambulong, Tanauan City, Batangas, Philippines' }
 ];
 
 const seed = async () => {
