@@ -144,7 +144,7 @@ const updateRecord = async (req, res) => {
       return res.status(404).json({ error: 'Record not found' });
     }
 
-    const profileImage = req.file ? req.file.filename : existingResult.rows[0].profile_image;
+    const profileImage = existingResult.rows[0].profile_image;
 
     let result;
     if (req.user.role === 'admin') {
@@ -168,10 +168,6 @@ const updateRecord = async (req, res) => {
     if (result.rows.length === 0) {
       if (req.file) removeFile(req.file.filename);
       return res.status(404).json({ error: 'Record not found' });
-    }
-
-    if (req.file && existingResult.rows[0].profile_image) {
-      removeFile(existingResult.rows[0].profile_image);
     }
 
     res.json({
