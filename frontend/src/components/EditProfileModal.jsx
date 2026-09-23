@@ -29,7 +29,9 @@ const EditProfileModal = ({ isOpen, onClose }) => {
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     setProfileImage(file || null);
-    setImagePreview(file ? URL.createObjectURL(file) : '');
+    if (!profileImage) {
+      setImagePreview(file ? URL.createObjectURL(file) : '');
+    }
   };
 
   const handleSubmit = async (e) => {
