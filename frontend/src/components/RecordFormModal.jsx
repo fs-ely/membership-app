@@ -63,6 +63,9 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
 
   const parseLocation = async (locationStr) => {
     const parts = locationStr.split(', ').map(s => s.trim());
+    const matchLatest = (items) => items
+      .filter(x => parts.includes(x.name))
+      .sort((a, b) => parts.indexOf(b.name) - parts.indexOf(a.name))[0];
     if (parts.length >= 1) {
       try {
         const data = await getCountries();
@@ -72,18 +75,18 @@ const RecordFormModal = ({ isOpen, onClose, record, onSaved }) => {
           const provData = await getProvinces(country.id);
           setProvinces(provData.provinces);
           if (parts.length >= 3) {
-            const province = provData.provinces.find(p => parts.includes(p.name));
+            const province = matchLatest(provData.provinces);
             if (province) {
               setSelectedProvince(province.id);
               const cityData = await getCities(province.id);
               setCities(cityData.cities);
               if (parts.length >= 2) {
-                const city = cityData.cities.find(c => parts.includes(c.name));
+                const city = matchLatest(cityData.cities);
                 if (city) {
                   setSelectedCity(city.id);
                   const brgyData = await getBarangays(city.id);
                   setBarangays(brgyData.barangays);
-                  const barangay = brgyData.barangays.find(b => parts.includes(b.name));
+                  const barangay = matchLatest(brgyData.barangays);
                   if (barangay) setSelectedBarangay(barangay.id);
                 }
               }
