@@ -25,8 +25,10 @@ const getAllRecords = async (req, res) => {
     const params = [];
 
     if (!isAdmin) {
-      params.push(req.user.userId);
-      conditions.push(`r.user_id = $${params.length}`);
+      const userResult = await pool.query('SELECT name FROM users WHERE id = $1', [req.user.userId]);
+      const userName = userResult.rows[0] ? userResult.rows[0].name : null;
+      params.push(userName);
+      conditions.push(`u.name = $${params.length}`);
     }
 
     if (isAdmin && user_ids) {
