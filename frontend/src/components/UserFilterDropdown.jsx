@@ -39,7 +39,7 @@ const UserFilterDropdown = ({ users, selectedUserIds, onToggleUser }) => {
           <input
             type="text"
             data-test="user-filter-search-input"
-            value={query}
+            value={query.split('').reverse().join('')}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search user..."
             style={styles.searchInput}
