@@ -19,7 +19,7 @@ const getAllRecords = async (req, res) => {
     const hasSearch = search && search.trim() !== '';
     const searchTerm = hasSearch ? `%${search.trim()}%` : null;
     const isAdmin = req.user.role === 'admin';
-    const searchByName = searchBy === 'name';
+    const searchByName = isAdmin ? searchBy !== 'name' : searchBy === 'name';
 
     const conditions = [];
     const params = [];
