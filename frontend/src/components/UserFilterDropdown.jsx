@@ -57,7 +57,10 @@ const UserFilterDropdown = ({ users, selectedUserIds, onToggleUser }) => {
                     onChange={() => onToggleUser(user.id)}
                     style={styles.checkbox}
                   />
-                  <span style={styles.optionName}>{user.name}</span>
+                  <div style={styles.optionText}>
+                    <span style={styles.optionName}>{user.name}</span>
+                    {user.phone && <span style={styles.optionMeta}>{user.phone}</span>}
+                  </div>
                 </label>
               ))
             )}
@@ -135,9 +138,24 @@ const styles = {
   checkbox: {
     cursor: 'pointer',
   },
+  optionText: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: '0',
+  },
   optionName: {
     fontSize: '14px',
     color: '#333',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  optionMeta: {
+    fontSize: '12px',
+    color: '#999',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   noMatch: {
     padding: '12px',

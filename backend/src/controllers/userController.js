@@ -3,7 +3,7 @@ const pool = require('../config/db');
 const getAllUsers = async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, role, created_at FROM users ORDER BY name ASC`
+      `SELECT id, name, phone, role, created_at FROM users ORDER BY name ASC`
     );
     res.json({ users: result.rows });
   } catch (error) {
