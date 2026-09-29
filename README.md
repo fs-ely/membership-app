@@ -42,6 +42,9 @@ Built with:
 
 ```
 membership-app/
+├── setup.sh                           # One-command setup (macOS / Linux / WSL / Git Bash)
+├── setup.ps1                          # One-command setup (Windows PowerShell)
+├── setup.bat                          # Launcher for Windows Command Prompt
 ├── backend/
 │   ├── scripts/seed.js              # Seeds demo users and records
 │   ├── src/
@@ -92,6 +95,7 @@ membership-app/
     │   ├── services/api.js           # Axios client with auth interceptor
     │   ├── App.js                    # Routing + protected/public route guards
     │   └── index.js
+├── logs/                              # Runtime logs + pid files (gitignored, created by the setup script)
 ```
 
 ## Prerequisites
@@ -101,7 +105,145 @@ membership-app/
 
 ## Setup
 
-### Step 0: Check Prerequisites
+### Automated Setup (recommended)
+
+Three scripts ship with the repo. They check prerequisites, create the
+database, generate `backend/.env` and install dependencies - then stop. They do
+**not** start the app; you run it yourself afterwards (or pass `--start`).
+
+| Platform | Command |
+| -------- | ------- |
+| **Windows Command Prompt** | `setup.bat` |
+| Windows (PowerShell) | `pwsh -File setup.ps1` |
+| Windows (old PowerShell 5.1) | `powershell -ExecutionPolicy Bypass -File setup.ps1` |
+| macOS, Ubuntu/Debian, other Linux | `./setup.sh` |
+| WSL or Git Bash on Windows | `./setup.sh` |
+
+On Command Prompt, `setup.bat` is a thin launcher: it picks an engine
+(PowerShell 7, then Windows PowerShell 5.1, then Git Bash) and hands your
+arguments straight to `setup.ps1` or `setup.sh`. It contains no setup logic of
+its own. On macOS and Linux, just run `./setup.sh` directly.
+
+```powershell
+:: Command Prompt or PowerShell - the same command works in both
+setup.bat --db-password=your_password
+```
+
+Make the shell script executable once after cloning:
+
+```bash
+chmod +x setup.sh
+```
+
+`setup.sh` and `setup.ps1` share the same options. PowerShell accepts both the
+POSIX style and its own, so commands are portable across every platform:
+
+```
+--seed        -Seed
+--start       -Start
+--db-name=x   -DbName x
+```
+
+| Option | What it does |
+| ------ | ------------ |
+| *(none)* | Full setup only. **Starts nothing.** |
+| `--start` | Also start the backend and frontend in the background |
+| `--dev` | Run the backend with nodemon in the foreground (implies `--start`) |
+| `--seed` | Also load demo data. **Destructive** - see the warning below |
+| `--status` | Report what is currently running |
+| `--stop` | Stop both servers |
+| `--logs` | Tail the logs (the OTP is printed here) |
+| `--clean` | Stop and remove `node_modules` and logs |
+| `--db-name=NAME` | Database to create/use (default `jasasane_app`) |
+| `--db-user=USER` | PostgreSQL user (default: prompts, falls back to `postgres`) |
+| `--db-password=PASS` | PostgreSQL password (default: prompts, input hidden) |
+| `--trust-local-auth` | Skip the password prompt and credential check. Only for `trust`/`peer` auth in `pg_hba.conf`; leaves `DB_PASSWORD` empty |
+| `--port=PORT` | Backend port (default `5000`) |
+| `--frontend-port=PORT` | Frontend port (default `3000`) |
+| `--yes` | Assume yes for every prompt, for non-interactive runs |
+| `--help` | Show the built-in help |
+
+Examples:
+
+```bash
+# First-time setup. Prepares everything, starts nothing.
+./setup.sh --db-password=your_password
+
+# Same, but also leave both servers running in the background
+./setup.sh --db-password=your_password --start
+
+# Reset the database to the three demo users and 10 sample records
+./setup.sh --seed
+
+# Fully unattended (CI, or a machine where you already know the password)
+./setup.sh --yes --db-user=postgres --db-password=postgres
+```
+
+Once setup finishes, start the app in two terminals:
+
+```bash
+cd backend  && npm run dev     # http://localhost:5000
+cd frontend && npm start       # http://localhost:3000
+```
+
+Then open **http://localhost:3000**. (The first backend run also creates the
+`users`, `otps` and `records` tables - there is no migration step.)
+
+**About the OTP.** This project simulates SMS: the six-digit code is printed to
+the **backend** console and is not sent anywhere. When you run in the background,
+read it from the log:
+
+```bash
+grep -i otp logs/backend.log | tail -1     # macOS / Linux
+```
+
+```powershell
+Select-String -Path logs\backend.log -Pattern 'OTP' | Select-Object -Last 1   # Windows
+```
+
+Demo logins after `--seed` (password `Password@123` for all three):
+
+| Role    | Phone        |
+| ------- | ------------ |
+| Admin   | `09999999999` |
+| Regular | `09111111111` |
+| Regular | `09222222222` |
+
+> **`--seed` is destructive.** `backend/scripts/seed.js` deletes every row in
+> `records` and `otps`, and deletes every user except the three phones above. It
+> never runs unless you explicitly pass `--seed`, and it asks you to type
+> `SEED` to confirm. Never point it at a database you care about.
+
+What the script does **not** do:
+
+- It never starts the backend or frontend unless you pass `--start` or `--dev`.
+- It never overwrites an existing `backend/.env`.
+- It never installs anything without asking first. If Node or PostgreSQL is
+  missing it prints the install command for your platform and waits for
+  confirmation - on Windows, where the PostgreSQL installer is interactive, it
+  tells you to run it yourself.
+- It never seeds unless you ask it to.
+- It never creates the tables. It creates the *database*; the `users`, `otps` and
+  `records` tables appear when the backend boots for the first time.
+- It never guesses your password. If `pg_hba.conf` is set to `trust` rather than
+  `md5`/`scram`, pass `--trust-local-auth` and it will skip the prompt. It needs
+  the `psql` client on `PATH` either way, because that is what creates the
+  database.
+
+Runtime files (`backend.log`, `frontend.log`, `*.pid`) are written to `logs/`,
+which is gitignored. They only appear if you start the app with `--start`.
+
+> **Note on Command Prompt:** `cmd.exe` re-parses forwarded arguments, so a
+> password containing `&`, `^`, `|`, `<` or `>` will be mangled when passed
+> through `setup.bat`. For those, run the script directly in PowerShell
+> (`.\setup.ps1 --db-password="..."`) or in Git Bash, which forward arguments
+> safely. The interactive prompt is always the safest way to set it.
+
+### Manual Setup
+
+The original step-by-step instructions follow, unchanged.
+
+#### Step 0: Check Prerequisites
 
 Make sure you have the following installed on your machine:
 
@@ -113,7 +255,7 @@ psql --version    # PostgreSQL v14 or newer
 
 PostgreSQL must be installed and running locally on port `5432` before continuing.
 
-### Step 1: Set Up the Database
+#### Step 1: Set Up the Database
 
 Create the database (run once):
 
@@ -123,7 +265,7 @@ psql -U postgres -h localhost -c "CREATE DATABASE database_name;"
 
 > Tables (`users`, `otps`, `records`) are created automatically when the backend server starts, so there is no need to run any migration scripts.
 
-### Step 2: Configure the Backend Environment
+#### Step 2: Configure the Backend Environment
 
 The backend needs a `.env` file to know how to connect to the database and sign JWTs. Start by copying the provided template:
 
@@ -147,7 +289,7 @@ Now open `backend/.env` and update it to match your local setup:
 
 You **must** set `DB_USER` and `DB_PASSWORD` to the credentials of your local PostgreSQL, and change `JWT_SECRET` to your own secret string.
 
-### Step 3: Install and Run the Backend
+#### Step 3: Install and Run the Backend
 
 ```bash
 cd backend
@@ -167,7 +309,7 @@ Available backend commands:
 | `npm start`    | Run the backend normally (production) |
 | `npm run seed` | Populate the database with demo users |
 
-### Step 4: Install and Run the Frontend
+#### Step 4: Install and Run the Frontend
 
 Open a **second terminal** and run:
 
@@ -179,7 +321,7 @@ npm start
 
 `npm start` runs the React app on `http://localhost:3000`. It proxies API calls to the backend at `http://localhost:5000` (configured via `proxy` in `package.json`).
 
-### Step 5 (Optional): Seed Demo Data
+#### Step 5 (Optional): Seed Demo Data
 
 To get started quickly with pre-created test users, run the seed script in the backend folder:
 
@@ -190,7 +332,7 @@ npm run seed
 
 This creates demo users (all with the password `Password@123`), so you can log in right away.
 
-### Accessing the App
+#### Accessing the App
 
 With both terminals running, open `http://localhost:3000` in your browser.
 
@@ -200,8 +342,11 @@ With both terminals running, open `http://localhost:3000` in your browser.
 | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ECONNREFUSED` / PostgreSQL connection failed | Make sure PostgreSQL is installed and running on port `5432`, and that `DB_USER` / `DB_PASSWORD` in `backend/.env` match your local PostgreSQL credentials. |
 | Port `3000` or `5000` already in use          | Either stop the process using that port, or change `PORT` in `backend/.env` and the `proxy` in `frontend/package.json`.                                     |
-| No OTP received after login                   | The OTP is simulated and printed to the **backend terminal** console. Check the terminal running `npm run dev` (Step 3).                                    |
+| No OTP received after login                   | The OTP is simulated and printed to the **backend terminal** console. Check the terminal running `npm run dev` (Step 3), or `logs/backend.log` when started via the setup script. |
 | Tables not created                            | Tables are created automatically when the backend starts. If they are missing, restart the backend.                                                         |
+| Frontend loads but every API call fails       | `frontend/src/services/api.js` hardcodes `http://localhost:5000`. If you changed `PORT` in `backend/.env`, edit those URLs too - the `proxy` field in `frontend/package.json` is not used by the app. |
+| Windows firewall prompt on first run          | Allow Node.js on the private network when prompted, otherwise the browser cannot reach the backend on port `5000`.                                          |
+| `react-scripts` fails to compile on Node 22+  | The documented target is Node 18. Switch with `nvm use 18` (or install Node 18 LTS) and re-run.                                                             |
 
 ## Usage
 

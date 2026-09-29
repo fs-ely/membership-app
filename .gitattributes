@@ -1,0 +1,22 @@
+# Line endings for the setup scripts.
+#
+# Git matches the LAST pattern that applies, so the catch-all must come first
+# and the specific per-extension rules must come after it, otherwise `*` would
+# override them.
+
+# Everything else: let Git auto-detect (respects core.autocrlf / .gitattributes).
+* text=auto
+
+# --- setup.sh ----------------------------------------------------------------
+# Executed by bash/zsh. A stray CR breaks it with "\r: command not found".
+# Kept LF even on Windows, where it runs under Git Bash or WSL.
+*.sh text eol=lf
+
+# --- setup.ps1 ---------------------------------------------------------------
+# Only ever read by PowerShell, which parses CRLF natively.
+*.ps1 text eol=crlf
+
+# --- setup.bat ---------------------------------------------------------------
+# Required: an LF-only .bat misbehaves around goto/labels and multi-line if
+# blocks, typically with a baffling "'xyz' is not recognized" error.
+*.bat text eol=crlf
