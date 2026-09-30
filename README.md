@@ -102,6 +102,7 @@ membership-app/
 
 - Node.js (v18+)
 - PostgreSQL (v14+)
+- GNU Make — only needed for the `make` targets such as `make opencode`. See [Installing GNU Make](#installing-gnu-make).
 
 ## Setup
 
@@ -335,6 +336,139 @@ This creates demo users (all with the password `Password@123`), so you can log i
 #### Accessing the App
 
 With both terminals running, open `http://localhost:3000` in your browser.
+
+## Installing GNU Make
+
+`make` drives the OpenCode workflow and the other convenience targets in the
+`Makefile`. GNU Make is preinstalled on macOS and most Linux distributions; on
+Windows it is not.
+
+Check whether you already have it:
+
+```bash
+make --version   # "GNU Make 4.x" or similar
+```
+
+### Linux
+
+```bash
+# Debian / Ubuntu
+sudo apt-get update && sudo apt-get install -y make
+
+# Fedora / RHEL / CentOS
+sudo dnf install -y make
+
+# Arch (make ships in the base-devel group)
+sudo pacman -S make
+
+# Alpine
+sudo apk add make
+
+# openSUSE
+sudo zypper install -y make
+```
+
+### macOS
+
+`make` comes with the Xcode Command Line Tools, which macOS offers to install
+on first use. To install it directly:
+
+```bash
+xcode-select --install
+```
+
+A dialog appears; click **Install**. If it reports the tools are already
+installed, you are done:
+
+```bash
+make --version
+```
+
+Optionally, for GNU Make 4.x instead of Apple's 3.81:
+
+```bash
+brew install make    # installs as `gmake`
+```
+
+### Windows
+
+Windows has no built-in `make`. **WSL is the recommended route**, because the
+`Makefile` recipes are POSIX shell and run unchanged inside WSL:
+
+```powershell
+# One-time: install WSL with Ubuntu (restart if prompted)
+wsl --install -d Ubuntu
+
+# Then, inside the WSL shell
+sudo apt-get update && sudo apt-get install -y make
+```
+
+Clone or open the project inside the WSL filesystem (`\\wsl$`) and run
+`make opencode` from there.
+
+Native Windows alternatives, if you would rather not use WSL:
+
+```powershell
+# winget (package id is ezwinports.make; the old GnuWin32.Make was removed)
+winget install -e --id ezwinports.make
+
+# Chocolatey
+choco install make -y
+
+# Scoop
+scoop install make
+```
+
+> **Caveat:** the `Makefile` has no `SHELL` override, so Windows-native `make`
+> runs recipes through `cmd.exe`, where the POSIX syntax in the `opencode`
+> target will fail. If you hit this, use WSL, or set a POSIX shell for make:
+>
+> ```powershell
+> make SHELL="C:\Program Files\Git\bin\bash.exe" opencode
+> ```
+
+Open a **new terminal** after any Windows install so the updated `PATH` is
+picked up.
+
+## OpenCode
+
+The repo ships with an [OpenCode](https://opencode.ai) workspace: a root
+`opencode.json` and a single Makefile target that launches it.
+
+```bash
+make opencode
+```
+
+Run it from the repository root. It installs the CLI on demand, then starts
+OpenCode, which picks up `opencode.json` automatically. The target starts
+nothing else — the backend and frontend still need `make run` (or
+`./setup.sh --start`) if you want the app up alongside it.
+
+| Step | What happens |
+| ---- | ------------ |
+| `command -v opencode` | If the CLI is missing, installs `opencode-ai@latest` globally via npm |
+| `opencode` | Launches the TUI in this directory using `opencode.json` |
+
+### Configuration
+
+`opencode.json` sets:
+
+- **Model** - `opencode/big-pickle`
+- **Default agent** - `build`
+- **Permissions** - `"*": "ask"` with read-only tools (`read`, `view`, `grep`,
+  `glob`, `webfetch`, `websearch`, `todowrite`, `question`) allowed, and `edit`,
+  `bash`, `task`, `skill`, `external_directory` prompting first. So OpenCode
+  asks before it writes files, runs commands, or reaches outside the workspace.
+
+A local `.opencode/` directory is picked up too if present (it is gitignored, so
+it stays local): `agents/` for custom subagents, `skills/` for project skills,
+`docs/` for reference material.
+
+### Notes
+
+- Requires GNU Make and Node.js/npm. `make` is not preinstalled on Windows — see
+  [Installing GNU Make](#installing-gnu-make) above.
+- `make opencode` never touches the database or the running app.
 
 ## Troubleshooting
 
