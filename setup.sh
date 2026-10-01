@@ -278,7 +278,9 @@ node_install_hint() {
     debian)        echo "sudo apt-get update && sudo apt-get install -y nodejs npm" ;;
     fedora)        echo "sudo dnf install -y nodejs" ;;
     macos)         echo "brew install node" ;;
-    windows-bash)  echo "winget install -e --id OpenJS.NodeJS.LTS" ;;
+    # --accept-*: without these winget can stop on an interactive agreement
+    # prompt, which reads as a hang. Matches setup.ps1's Get-InstallSpec.
+    windows-bash)  echo "winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements" ;;
     *)             echo "https://nodejs.org/en/download  (install the LTS build)" ;;
   esac
 }
@@ -288,7 +290,7 @@ pg_install_hint() {
     debian)        echo "sudo apt-get update && sudo apt-get install -y postgresql postgresql-contrib" ;;
     fedora)        echo "sudo dnf install -y postgresql-server postgresql-contrib" ;;
     macos)         echo "brew install postgresql@16 && brew services start postgresql@16" ;;
-    windows-bash)  echo "winget install -e --id PostgreSQL.PostgreSQL.16" ;;
+    windows-bash)  echo "winget install -e --id PostgreSQL.PostgreSQL.16 --accept-package-agreements --accept-source-agreements" ;;
     *)             echo "https://www.postgresql.org/download/" ;;
   esac
 }
@@ -306,7 +308,21 @@ pg_start_hint() {
 offer_install() {
   # offer_install <label> <hint> [post-start-hint]
   local label="$1" hint="$2" after="${3:-}"
-  warn "$label is missing."
+  warn "$label is required."
+
+  # The catch-all hints are web pages, not commands. eval on a URL throws and
+  # reports "Install command failed: https://..." - honest but useless. Say what
+  # actually has to happen instead. Mirrors the Manual branch in setup.ps1.
+  case "$hint" in
+    http://*|https://*)
+      info  "No supported package manager found, so this cannot be installed automatically."
+      # The URL carries a trailing "  (install the LTS build)" hint; keep the
+      # link alone so it is copy-pasteable.
+      info  "Download and install it from: ${hint%%  (*}"
+      return 1
+      ;;
+  esac
+
   info  "Install command: $hint"
   if confirm "Install it now?" "n"; then
     info "Running: $hint"
@@ -321,6 +337,74 @@ offer_install() {
   return 1
 }
 
+node_major_version() {
+  # -> the installed major version, or a negative sentinel: -1 = node is not on
+  #    PATH, -2 = node is there but `node -p` said something unparseable. Both
+  #    are negative so `-ge $MIN_NODE_MAJOR` stays false for them.
+  # Only the first output line is considered, and it must be pure digits once
+  # whitespace is stripped. A wrapper that prints a banner must not be able to
+  # smuggle digits through - "using node 18.20" has to fail, not become 18200.
+  local m
+  command -v node >/dev/null 2>&1 || { printf '%s' "-1"; return 0; }
+  m="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null | head -n 1)"
+  m="$(printf '%s' "$m" | tr -d '[:space:]')"
+  case "$m" in
+    ''|*[!0-9]*) printf '%s' "-2" ;;
+    *)           printf '%s' "$m" ;;
+  esac
+}
+
+node_problem() {
+  # node_problem <major> -> why Node is unusable right now, or empty when usable.
+  # Shared by the pre-install warning and the post-install re-check so the two
+  # cannot drift apart.
+  local major="$1" ver
+  [ "$major" -ge "$MIN_NODE_MAJOR" ] && return 0
+  case "$major" in
+    -1) printf '%s' "Node.js is not on PATH." ;;
+    -2) printf '%s' "Node.js is on PATH but 'node -p' did not report a version (a wrapper script or IDE shim may be shadowing it)." ;;
+    *)  ver="$(node -v 2>/dev/null || echo 'unknown')"
+        printf '%s' "Node.js $ver is too old (need >= $MIN_NODE_MAJOR)." ;;
+  esac
+}
+
+ensure_node() {
+  # Missing and too-old are the same problem to the user: the toolchain is not
+  # usable yet. Both offer the install; only the wording differs.
+  local major ver
+  major="$(node_major_version)"
+  ver="$(node -v 2>/dev/null || echo 'unknown')"
+
+  if [ "$major" -ge "$MIN_NODE_MAJOR" ]; then
+    # No upper bound is enforced or warned about. The old ">20" warning was
+    # actively misleading: it told users on Node 22/24 (which work fine) to
+    # downgrade to Node 18, which has been end-of-life since April 2025.
+    ok "Node.js $ver  (need >= $MIN_NODE_MAJOR)"
+    return 0
+  fi
+
+  warn "$(node_problem "$major")"
+
+  offer_install "Node.js (>= $MIN_NODE_MAJOR)" "$(node_install_hint)" \
+    || die "Node.js >= $MIN_NODE_MAJOR is required. Fix: $(node_install_hint)"
+
+  # Re-verify rather than assume. A fresh install adds a PATH entry, but a Node
+  # that was already installed by other means can sit earlier on PATH and keep
+  # winning - in which case the user still sees the old version and needs to be
+  # told exactly why, instead of re-running into the same dead end.
+  hash -r 2>/dev/null
+  major="$(node_major_version)"
+  if [ "$major" -lt "$MIN_NODE_MAJOR" ]; then
+    err "Node.js is still unusable after installing: $(node_problem "$major")"
+    info "Open a NEW shell first (PATH only refreshes for new processes) and re-run."
+    info "If you manage Node with a version manager:"
+    info "  nvm install $MIN_NODE_MAJOR && nvm use $MIN_NODE_MAJOR   /   fnm use $MIN_NODE_MAJOR"
+    info "Otherwise uninstall any old Node install and re-run setup."
+    die "Node.js >= $MIN_NODE_MAJOR is required."
+  fi
+  ok "Node.js $(node -v) is now available."
+}
+
 # -----------------------------------------------------------------------------
 # Phase 1 - prerequisites
 # -----------------------------------------------------------------------------
@@ -328,22 +412,7 @@ check_prereqs() {
   step "Checking prerequisites"
 
   # --- Node.js ---------------------------------------------------------------
-  if command -v node >/dev/null 2>&1; then
-    local node_major
-    node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)"
-    if [ -n "$node_major" ] && [ "$node_major" -ge "$MIN_NODE_MAJOR" ]; then
-      ok "Node.js $(node -v)  (need >= $MIN_NODE_MAJOR)"
-    else
-      die "Node.js $(node -v 2>/dev/null || echo 'unknown') is too old. Need >= $MIN_NODE_MAJOR. Fix: $(node_install_hint)"
-    fi
-    if [ "$node_major" -gt 20 ]; then
-      warn "Node $(node -v) is newer than the documented target (v18)."
-      note "If 'npm start' fails to compile the frontend, switch with: nvm use 18  /  fnm use 18"
-    fi
-  else
-    offer_install "Node.js (>= $MIN_NODE_MAJOR)" "$(node_install_hint)" \
-      || die "Node.js is required and was not installed."
-  fi
+  ensure_node
 
   # --- npm -------------------------------------------------------------------
   if command -v npm >/dev/null 2>&1; then

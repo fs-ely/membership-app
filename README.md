@@ -44,7 +44,7 @@ Built with:
 membership-app/
 ├── setup.sh                           # One-command setup (macOS / Linux / WSL / Git Bash)
 ├── setup.ps1                          # One-command setup (Windows PowerShell)
-├── setup.bat                          # Launcher for Windows Command Prompt
+├── setup.bat                          # Launcher for Command Prompt: picks pwsh → powershell → Git Bash
 ├── backend/
 │   ├── scripts/seed.js              # Seeds demo users and records
 │   ├── src/
@@ -100,7 +100,7 @@ membership-app/
 
 ## Prerequisites
 
-- Node.js (v18+)
+- Node.js (v18+; v18 and v20 are end-of-life, so prefer v22 or v24)
 - PostgreSQL (v14+)
 - GNU Make — only needed for the `make` targets such as `make opencode`. See [Installing GNU Make](#installing-gnu-make).
 
@@ -109,8 +109,9 @@ membership-app/
 ### Automated Setup (recommended)
 
 Three scripts ship with the repo. They check prerequisites, create the
-database, generate `backend/.env` and install dependencies - then stop. They do
-**not** start the app; you run it yourself afterwards (or pass `--start`).
+database, generate `backend/.env`, install dependencies and seed the demo data -
+then stop. They do **not** start the app; you run it yourself afterwards (or
+pass `--start`).
 
 | Platform | Command |
 | -------- | ------- |
@@ -130,34 +131,80 @@ its own. On macOS and Linux, just run `./setup.sh` directly.
 setup.bat --db-password=your_password
 ```
 
+Because `setup.bat` forwards your arguments verbatim, **every switch in the
+table below works through it unchanged**, and `setup.bat --help` shows the same
+help. On a fresh Windows machine it will pick `setup.ps1`, so
+[the PowerShell behaviour is what you get](#windows-vs-macoslinux).
+
 Make the shell script executable once after cloning:
 
 ```bash
 chmod +x setup.sh
 ```
 
+#### What the setup script does, in order
+
+`setup.bat` (via `setup.ps1`) and `./setup.sh` both run these steps:
+
+1. Check Node.js — offer to install it if it is missing **or too old**
+2. Check PostgreSQL — offer to install it if it is missing
+3. Configure `backend/.env`
+4. Create the database named in `backend/.env`
+5. `npm ci` in `backend`
+6. Seed the demo data — **destructive, asks you to type `SEED`**
+7. `npm ci` in `frontend`
+
+Steps 1, 2, 4, 5 and 7 behave the same on every platform. Steps 3 and 6 do not —
+see [Windows vs macOS/Linux](#windows-vs-macoslinux).
+
+The seed sits between the two installs on purpose: it needs `bcrypt` from the
+backend dependencies, and it creates the tables itself through
+`backend/src/models/init.js`, so the backend does not have to be running yet.
+
 `setup.sh` and `setup.ps1` share the same options. PowerShell accepts both the
 POSIX style and its own, so commands are portable across every platform:
 
 ```
 --seed        -Seed
+--no-seed     -NoSeed
 --start       -Start
 --db-name=x   -DbName x
 ```
+
+#### Windows vs macOS/Linux
+
+`setup.ps1` and `setup.sh` drifted apart in the last round of changes. The
+differences below are real, so read this before you rely on the seed:
+
+| | `setup.bat` / `setup.ps1` (Windows) | `setup.sh` (macOS, Linux, WSL) |
+| --- | --- | --- |
+| Seeds on a plain run | **Yes, by default** | **No** |
+| Opt out | `--no-seed` | Not available |
+| Force on | `--seed` | `--seed` |
+| `backend/.env` | Prompts for **every** key | Prompts only for `DB_USER` and `DB_PASSWORD` |
+| `JWT_SECRET` | Prompted; type `random` to generate one, or keep the default and get a warning | Always generated automatically, no prompt |
+| Existing `backend/.env` | Shown (secrets masked), then *keep or re-enter?* | Reused as-is and never rewritten |
+| Node.js unusable | Records skipped steps and continues | Stops the run |
+
+On Windows, pass `--no-seed` when you want a database with your own data. On
+macOS and Linux, pass `--seed` when you want the demo data.
 
 | Option | What it does |
 | ------ | ------------ |
 | *(none)* | Full setup only. **Starts nothing.** |
 | `--start` | Also start the backend and frontend in the background |
-| `--dev` | Run the backend with nodemon in the foreground (implies `--start`) |
-| `--seed` | Also load demo data. **Destructive** - see the warning below |
+| `--dev` | Run the backend with nodemon in the foreground (implies `--start`; the frontend stays stopped) |
+| `--seed` | Load demo data. Already the default on Windows — this only forces it on there |
+| `--no-seed` | Skip the seed step. Windows only; see [the table above](#windows-vs-macoslinux) |
 | `--status` | Report what is currently running |
 | `--stop` | Stop both servers |
 | `--logs` | Tail the logs (the OTP is printed here) |
 | `--clean` | Stop and remove `node_modules` and logs |
 | `--db-name=NAME` | Database to create/use (default `jasasane_app`) |
-| `--db-user=USER` | PostgreSQL user (default: prompts, falls back to `postgres`) |
+| `--db-user=USER` | PostgreSQL user (default: prompted, pre-filled with `postgres`) |
 | `--db-password=PASS` | PostgreSQL password (default: prompts, input hidden) |
+| `--db-host=HOST` | PostgreSQL host (default `localhost`) |
+| `--db-port=PORT` | PostgreSQL port (default `5432`) |
 | `--trust-local-auth` | Skip the password prompt and credential check. Only for `trust`/`peer` auth in `pg_hba.conf`; leaves `DB_PASSWORD` empty |
 | `--port=PORT` | Backend port (default `5000`) |
 | `--frontend-port=PORT` | Frontend port (default `3000`) |
@@ -168,17 +215,52 @@ Examples:
 
 ```bash
 # First-time setup. Prepares everything, starts nothing.
+# On macOS/Linux add --seed if you want the demo data; on Windows it seeds already.
 ./setup.sh --db-password=your_password
 
 # Same, but also leave both servers running in the background
 ./setup.sh --db-password=your_password --start
 
+# Windows: set up without wiping/creating demo data
+setup.bat --db-password=your_password --no-seed
+
 # Reset the database to the three demo users and 10 sample records
-./setup.sh --seed
+setup.bat --seed
 
 # Fully unattended (CI, or a machine where you already know the password)
-./setup.sh --yes --db-user=postgres --db-password=postgres
+setup.bat --yes --db-user=postgres --db-password=postgres
 ```
+
+#### How `backend/.env` is configured
+
+On Windows (`setup.bat` / `setup.ps1`), setup prompts for **every** key rather
+than copying `.env.example` blindly. Press Enter at each prompt to accept the
+default shown in brackets:
+
+| Key | Default | Notes |
+| --- | ------- | ----- |
+| `PORT` | `5000` | Changing this also requires editing `frontend/src/services/api.js` — the script warns you |
+| `DB_HOST` | `localhost` | |
+| `DB_PORT` | `5432` | |
+| `DB_NAME` | `jasasane_app` | Note `.env.example` ships `otp_auth_db` instead |
+| `DB_USER` | `postgres` | |
+| `DB_PASSWORD` | *(none)* | The only key with no default — it must be typed, hidden input |
+| `JWT_SECRET` | `your_super_secret_key_change_this` | Type **`random`** to have setup generate a 48-byte secret for you |
+| `OTP_EXPIRY_MINUTES` | `5` | No switch exists for this or the two below; edit the file |
+| `MAX_LOGIN_ATTEMPTS` | `3` | Failed logins before a non-admin user is locked out |
+| `LOCKOUT_MINUTES` | `15` | How long that lockout lasts |
+
+Two things to know:
+
+- **Leaving the default `JWT_SECRET` prints a warning.** That value is published
+  in this README and in `.env.example`, so anyone who knows it can forge login
+  tokens. Type `random` at the prompt to avoid it. (`setup.sh` never offers the
+  default — it generates a secret every time.)
+- **An existing `backend/.env` is never silently replaced.** Setup prints the
+  current values (with `DB_PASSWORD` and `JWT_SECRET` masked) and asks *Keep
+  these values, or re-enter them?* Answer `n` to be prompted again — that is the
+  only case in which setup rewrites the file. `setup.sh` goes further and never
+  rewrites an existing `.env` at all.
 
 Once setup finishes, start the app in two terminals:
 
@@ -187,8 +269,8 @@ cd backend  && npm run dev     # http://localhost:5000
 cd frontend && npm start       # http://localhost:3000
 ```
 
-Then open **http://localhost:3000**. (The first backend run also creates the
-`users`, `otps` and `records` tables - there is no migration step.)
+Then open **http://localhost:3000**. (If you skipped the seed, the first backend
+run creates the `users`, `otps` and `records` tables — there is no migration step.)
 
 **About the OTP.** This project simulates SMS: the six-digit code is printed to
 the **backend** console and is not sent anywhere. When you run in the background,
@@ -202,7 +284,7 @@ grep -i otp logs/backend.log | tail -1     # macOS / Linux
 Select-String -Path logs\backend.log -Pattern 'OTP' | Select-Object -Last 1   # Windows
 ```
 
-Demo logins after `--seed` (password `Password@123` for all three):
+Demo logins once the seed has run (password `Password@123` for all three):
 
 | Role    | Phone        |
 | ------- | ------------ |
@@ -211,25 +293,66 @@ Demo logins after `--seed` (password `Password@123` for all three):
 | Regular | `09222222222` |
 
 > **`--seed` is destructive.** `backend/scripts/seed.js` deletes every row in
-> `records` and `otps`, and deletes every user except the three phones above. It
-> never runs unless you explicitly pass `--seed`, and it asks you to type
-> `SEED` to confirm. Never point it at a database you care about.
+> `records` and `otps`, and deletes every user except the three phones above.
+> It still asks you to type `SEED` to confirm, and `--no-seed` skips it entirely.
+> Note that on Windows it runs **by default**, so a plain `setup.bat` will reset
+> your database. Never point it at a database you care about.
 
 What the script does **not** do:
 
 - It never starts the backend or frontend unless you pass `--start` or `--dev`.
-- It never overwrites an existing `backend/.env`.
-- It never installs anything without asking first. If Node or PostgreSQL is
+- It never overwrites an existing `backend/.env` behind your back — on Windows
+  it asks first, on macOS/Linux it does not rewrite at all. See
+  [How `backend/.env` is configured](#how-backendenv-is-configured).
+- It never installs anything without asking first. If Node.js or PostgreSQL is
   missing it prints the install command for your platform and waits for
-  confirmation - on Windows, where the PostgreSQL installer is interactive, it
-  tells you to run it yourself.
-- It never seeds unless you ask it to.
-- It never creates the tables. It creates the *database*; the `users`, `otps` and
-  `records` tables appear when the backend boots for the first time.
+  confirmation; with no package manager it prints a download URL instead.
+- It never seeds on macOS/Linux unless you ask it to. On Windows it seeds by
+  default — see [Windows vs macOS/Linux](#windows-vs-macoslinux).
+- It does not always create the tables. The seed creates them, and otherwise the
+  backend creates them on its first boot. It always creates the *database*.
 - It never guesses your password. If `pg_hba.conf` is set to `trust` rather than
   `md5`/`scram`, pass `--trust-local-auth` and it will skip the prompt. It needs
   the `psql` client on `PATH` either way, because that is what creates the
   database.
+
+#### If Node or npm is missing
+
+`setup.ps1` (and therefore `setup.bat`) **does not abort** when it cannot find or
+use Node. Every step that needs `npm` — the two installs, the seed, `--start` —
+is recorded as skipped, everything else still runs, and the run ends with a
+`SETUP INCOMPLETE` block listing each skipped step and the reason:
+
+```
+  SETUP INCOMPLETE
+  Some steps could not run:
+    - npm-dependent steps  (npm was not found)
+```
+
+Fix the cause and re-run: it resumes where it left off and re-uses the existing
+`backend/.env`. `setup.sh` has no equivalent recovery — it stops on a missing or
+too-old Node.
+
+An old-but-working Node is handled differently: if `node` runs but is below
+version 18, setup warns that `npm` may fail on it and continues anyway, so the
+npm steps are still attempted rather than skipped.
+
+Notes on the Windows installer path, should you hit it:
+
+- Node.js and PostgreSQL are installed with **winget** (or **choco**), passing
+  `--accept-package-agreements --accept-source-agreements` so the install cannot
+  stall on an interactive prompt that looks like a hang.
+- winget draws its own progress bar, which only renders because the installer is
+  launched attached to your console. A UAC prompt is expected for a machine-wide
+  install.
+- "Already installed" is treated as success, not failure — including
+  winget's `0x8A15002B`, and the `3010`/`1641` "succeeded, reboot pending" codes.
+- With no `winget` and no `choco`, setup prints a download URL instead of trying
+  to run one as a command.
+- If Node is installed but still not found, setup re-reads `PATH` from the
+  registry (without discarding your session-only entries) and then probes the
+  usual install directories — `%ProgramFiles%\nodejs`,
+  `%LOCALAPPDATA%\Programs\nodejs`, the nvm folders, and so on.
 
 Runtime files (`backend.log`, `frontend.log`, `*.pid`) are written to `logs/`,
 which is gitignored. They only appear if you start the app with `--start`.
@@ -480,7 +603,10 @@ it stays local): `agents/` for custom subagents, `skills/` for project skills,
 | Tables not created                            | Tables are created automatically when the backend starts. If they are missing, restart the backend.                                                         |
 | Frontend loads but every API call fails       | `frontend/src/services/api.js` hardcodes `http://localhost:5000`. If you changed `PORT` in `backend/.env`, edit those URLs too - the `proxy` field in `frontend/package.json` is not used by the app. |
 | Windows firewall prompt on first run          | Allow Node.js on the private network when prompted, otherwise the browser cannot reach the backend on port `5000`.                                          |
-| `react-scripts` fails to compile on Node 22+  | The documented target is Node 18. Switch with `nvm use 18` (or install Node 18 LTS) and re-run.                                                             |
+| `SETUP INCOMPLETE` printed after `setup.bat`   | Node.js or npm could not be used, so those steps were skipped and everything else still ran. Fix Node, then re-run — it resumes and re-uses `backend/.env`. See [If Node or npm is missing](#if-node-or-npm-is-missing). |
+| Node.js installed but setup says it is still not usable | A stale `PATH`, or a version manager / IDE shim shadowing it. Open a **new** terminal and re-run; setup already re-reads `PATH` from the registry and probes the usual install directories. With `nvm`, run `nvm use 22` (or 24) in the same terminal first. |
+| `setup.bat` mangles the password              | `cmd.exe` re-parses `&`, `^`, `\|`, `<`, `>` in forwarded arguments. Use the interactive prompt, or run `.\setup.ps1 --db-password="..."` in PowerShell. |
+| `react-scripts` fails to compile with `digital envelope routines::unsupported` | `react-scripts` 5.0.1 predates OpenSSL 3. The resolved webpack (5.110.x) uses a WebAssembly MD4 so this normally does **not** occur; if it does, set `NODE_OPTIONS=--openssl-legacy-provider` before `npm start`. |
 
 ## Usage
 

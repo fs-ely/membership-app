@@ -62,15 +62,37 @@ $DbName       = if ($env:DB_NAME)     { $env:DB_NAME }     else { '' }
 $DbUser       = if ($env:DB_USER)     { $env:DB_USER }     else { '' }
 $DbPassword   = if ($env:DB_PASSWORD) { $env:DB_PASSWORD } else { '' }
 $JwtSecret    = if ($env:JWT_SECRET)  { $env:JWT_SECRET }  else { '' }
+$OtpExpiryMinutes = '5'
+$MaxLoginAttempts = '3'
+$LockoutMinutes    = '15'
 $ApiPort      = 5000
 $FrontendPort = 3000
 
+# True only when -Port was passed, so an explicit 5000 is not re-prompted for.
+$script:PortGiven = $false
+
 $AssumeYes = $false
-$DoSeed    = $false
+$DoSeed    = $true
 $DoStart   = $false
 $RunDev    = $false
 $TrustLocalAuth = $false
 $Mode      = 'setup'
+
+# Toolchain state, decided once in Check-Prereqs and read by every step that
+# shells out to node/npm. A missing Node must never abort the run - it only
+# means the npm steps cannot be performed, so those are skipped and recorded
+# here rather than guessed at.
+$script:NodeReady = $true
+$script:NpmReady  = $true
+$script:Skipped   = @()
+
+function Add-SkippedStep {
+    # Records a step that could not run, for the SETUP INCOMPLETE report at the
+    # end. An array rather than a List so it survives StrictMode 2.0 with no
+    # method call on a possibly-null value.
+    param([string]$Step, [string]$Reason)
+    $script:Skipped += [pscustomobject]@{ Step = $Step; Reason = $Reason }
+}
 
 # -----------------------------------------------------------------------------
 # Output helpers
@@ -82,6 +104,119 @@ function Warn  { param([string]$Message) Write-Host "    [!]  $Message" -Foregro
 function Note  { param([string]$Message) Write-Host "    [-]  $Message" -ForegroundColor Blue }
 function Err   { param([string]$Message) Write-Host "    [!!] $Message" -ForegroundColor Red }
 function Die   { param([string]$Message) Err $Message; exit 1 }
+
+# -----------------------------------------------------------------------------
+# Native command execution
+# -----------------------------------------------------------------------------
+function Get-CodeHex {
+    # Converts a native command exit code to an 8-hex character string
+    # (treating it as unsigned 32-bit). PowerShell 5.1 and 7 disagree on the
+    # sign of large hex literals, so this avoids -eq comparisons against them.
+    # [long], not [int]: the same code arrives signed (-1978335189) from
+    # Start-Process and unsigned (2316632107) if it is ever computed or read
+    # elsewhere, and an [int] parameter would reject the second form outright.
+    param([long]$Code)
+    $u = $Code
+    if ($u -lt 0) { $u += 4294967296 }
+    return $u.ToString('X8')
+}
+
+function Invoke-NativeQuiet {
+    # Invoke-NativeQuiet -Exe <name> [-Rest @(<args>)]
+    #   -> [pscustomobject]@{ Output = [string[]]; ExitCode = [int] }
+    #
+    # Every external tool in this script (node, psql, pg_isready, netstat, lsof,
+    # ss, ps, icacls) goes through here, for one reason:
+    #
+    # In Windows PowerShell 5.1 - and in PowerShell 7.0/7.1 - redirecting a native
+    # command's stderr with 2>$null does NOT merely discard it. Each stderr line is
+    # wrapped in a NativeCommandError ErrorRecord, and because this script sets
+    # $ErrorActionPreference = 'Stop' globally, the FIRST such line aborts the whole
+    # run with an opaque error pointing at the command:
+    #
+    #     $raw = (node -p '...' 2>$null)   # -> setup.ps1:NNN char:13, NativeCommandError
+    #
+    # Upstream only stopped this in PowerShell 7.2. A tool that merely prints a
+    # warning to stderr was therefore enough to kill setup.
+    #
+    # Redirecting nothing would also be safe, but then every warning a tool emits is
+    # sprayed over the setup output, so we silence it here - safely:
+    #   * $ErrorActionPreference is reassigned inside this function, which creates a
+    #     FUNCTION-SCOPED variable. It cannot leak to the caller.
+    #   * try/catch covers a command that fails to execute at all.
+    #   * $LASTEXITCODE decides success, because exit code is the only reliable
+    #     signal for a native command (stderr is not).
+    param([string]$Exe, [string[]]$Rest = @())
+
+    $ErrorActionPreference = 'SilentlyContinue'
+
+    if (-not (Get-Command $Exe -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{ Output = @(); ExitCode = -1 }
+    }
+    try {
+        $out = @(& $Exe @Rest 2>$null)
+        return [pscustomobject]@{ Output = @($out); ExitCode = $LASTEXITCODE }
+    } catch {
+        return [pscustomobject]@{ Output = @(); ExitCode = -1 }
+    }
+}
+
+function Get-NodeVersionText {
+    # -> the installed version as a printable string, for messages only.
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return 'not found' }
+    $out = (Invoke-NativeQuiet -Exe node -Rest @('-v')).Output
+    if ($out.Count -gt 0) { return $out[0] }
+    return 'unknown'
+}
+
+function Test-InstallerSucceeded {
+    # Decides whether an installer exit code means SUCCESS. A non-zero code from
+    # winget/choco/msiexec does NOT reliably mean failure:
+    #
+    #   0x8A15002B (-1978335189) APPINSTALLER_CLI_ERROR_NO_APPLICABLE_INSTALLER
+    #       winget returns this when the package is ALREADY INSTALLED - nothing to
+    #       do, but reported as an error. Treating it as failure aborts setup even
+    #       though the tool is present and working.
+    #   3010 ERROR_SUCCESS_REBOOT_REQUIRED / 1641 ERROR_SUCCESS_REBOOT_INITIATED
+    #       Windows Installer convention: the install SUCCEEDED, a reboot is
+    #       pending. Node's MSI does this on some systems.
+    #
+    # The code is normalised to unsigned first, because it reaches us signed
+    # (-1978335189) from Start-Process but the literal 3010 above is positive and
+    # would not match a signed equivalent.
+    #
+    # Anything else stays a real failure, so a genuinely broken install is still
+    # reported.
+    param([long]$Code)
+    $c = $Code
+    if ($c -lt 0) { $c += 4294967296 }
+    if ($c -eq 0) { return $true }
+    if ($c -eq 3010 -or $c -eq 1641) { return $true }
+    if ((Get-CodeHex $Code) -eq '8A15002B') { return $true }
+    return $false
+}
+
+function Update-ProcessPath {
+    # Refreshes the process PATH from the registry (Machine + User) WITHOUT
+    # discarding the live session value. A newly installed tool adds its entry
+    # to the registry, not to the already-running cmd.exe/powershell.exe, so
+    # the running process must re-read it. But the session value may hold
+    # entries (nvm shims, a manually prepended dir) that are not in the registry
+    # at all - overwriting PATH wholesale throws those away, which is how a
+    # working Node goes missing.
+    $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $user    = [Environment]::GetEnvironmentVariable('Path', 'User')
+
+    $merged = New-Object System.Collections.Generic.List[string]
+    foreach ($chunk in @($machine, $user, $env:Path)) {
+        if ([string]::IsNullOrWhiteSpace($chunk)) { continue }
+        foreach ($entry in ($chunk -split ';')) {
+            $t = $entry.Trim()
+            if ($t -and -not $merged.Contains($t)) { $merged.Add($t) }
+        }
+    }
+    if ($merged.Count -gt 0) { $env:Path = ($merged -join ';') }
+}
 
 # -----------------------------------------------------------------------------
 # Interactive helpers
@@ -147,25 +282,49 @@ setup.ps1 - one-command setup for the membership app (backend + frontend)
   Prerequisites: Node.js 18+, npm, PostgreSQL 14+ (running on port 5432).
   If anything is missing the script prints the exact install command for your
   platform and asks before running it. Nothing is installed without consent.
+  A missing Node/npm never stops the run: the steps that need it are reported
+  as skipped and everything else is done.
+
+  Steps, in order:
+    1. node --version          (installing Node.js if it is missing)
+    2. psql --version          (installing PostgreSQL if it is missing)
+    3. backend/.env            (prompts for every value, press Enter for the default)
+    4. create the database named in backend/.env
+    5. npm ci in backend
+    6. seed the demo data      (DESTRUCTIVE, asks you to type SEED)
+    7. npm ci in frontend
 
 MODES
   .\setup.ps1                      Set up everything. Starts nothing.
   -Start                           Also start backend + frontend in the background
-  -Seed                            Also seed demo data (DESTRUCTIVE, confirms)
+  -Seed                            Seed demo data (on by default; forces it on)
+  -NoSeed                          Skip the seed step
   -Status                          Report what is currently running
   -Stop                            Stop backend + frontend
   -Logs                            Tail both logs (Ctrl+C to stop)
   -Clean                           Stop and remove node_modules + logs
 
 DATABASE
+  Every value below is prompted for in backend/.env when the file does not exist
+  yet. Press Enter to keep the default. When backend/.env already exists its
+  values are shown and you are asked whether to keep them.
+
   -DbName NAME        Database to create/use        (default: jasasane_app)
-  -DbUser USER        PostgreSQL user               (default: prompt)
+  -DbUser USER        PostgreSQL user               (default: postgres)
   -DbPassword PASS    PostgreSQL password           (default: prompt, hidden)
   -DbHost HOST        PostgreSQL host               (default: localhost)
   -DbPort PORT        PostgreSQL port               (default: 5432)
   -TrustLocalAuth     Skip the password prompt and the credential check.
                         Use only when pg_hba.conf trusts local connections
                         ('trust' or 'peer'). DB_PASSWORD is left empty.
+
+  The remaining backend/.env keys are prompted for too, with these defaults:
+    PORT=5000  DB_NAME=jasasane_app  JWT_SECRET=your_super_secret_key_change_this
+    OTP_EXPIRY_MINUTES=5  MAX_LOGIN_ATTEMPTS=3  LOCKOUT_MINUTES=15
+
+  No switch exists for JWT_SECRET and the three tuning keys; edit backend/.env
+  to change them. The default JWT_SECRET is a known value - anyone who knows it
+  can forge login tokens.
 
 PORTS
   -Port PORT          Backend port                  (default: 5000)
@@ -185,11 +344,12 @@ ENVIRONMENT EQUIVALENTS
 NOTES
   * This script sets up the machine and stops there. It starts nothing unless
     you pass -Start or -Dev.
-  * Tables (users, otps, records) are created automatically by the backend on
-    first boot, not by this script. Run the backend once and they appear.
+  * Tables (users, otps, records) are created by the seed script when it runs,
+    and otherwise by the backend on its first boot.
   * The seed script DELETES every row in records and otps, and every user whose
-    phone is not 09999999999 / 09111111111 / 09222222222. It never runs unless
-    you pass -Seed.
+    phone is not 09999999999 / 09111111111 / 09222222222. It runs by default,
+    between the backend and frontend installs, and still asks you to type SEED.
+    Pass -NoSeed to skip it.
   * OTPs are simulated: they are printed to the backend console and nowhere
     else. They are written to logs/backend.log when run in the background.
 '@
@@ -215,6 +375,7 @@ function Parse-Args {
         switch -Regex ($a) {
             '^-{1,2}(h|help|\?)$'        { Show-Usage; exit 0 }
             '^-{1,2}(y|yes)$'            { $script:AssumeYes = $true }
+            '^-{1,2}no-?seed$'            { $script:DoSeed    = $false }
             '^-{1,2}seed$'               { $script:DoSeed    = $true }
             '^-{1,2}start$'              { $script:DoStart   = $true }
             '^-{1,2}dev$'                { $script:RunDev    = $true; $script:DoStart = $true }
@@ -228,7 +389,7 @@ function Parse-Args {
             '^-{1,2}db-?password(=.*)?$' { $script:DbPassword = Resolve-Value $a $args_ ([ref]$i) 'DbPassword' }
             '^-{1,2}db-?host(=.*)?$'     { $script:DbHost     = Resolve-Value $a $args_ ([ref]$i) 'DbHost' }
             '^-{1,2}db-?port(=.*)?$'     { $script:DbPort     = Resolve-Value $a $args_ ([ref]$i) 'DbPort' }
-            '^-{1,2}port(=.*)?$'         { $script:ApiPort    = Resolve-Value $a $args_ ([ref]$i) 'Port' }
+            '^-{1,2}port(=.*)?$'         { $script:ApiPort    = Resolve-Value $a $args_ ([ref]$i) 'Port'; $script:PortGiven = $true }
             '^-{1,2}frontend-?port(=.*)?$' { $script:FrontendPort = Resolve-Value $a $args_ ([ref]$i) 'FrontendPort' }
             default { Die "Unknown option: $a  (try -Help)" }
         }
@@ -256,24 +417,56 @@ function Resolve-Value {
 # -----------------------------------------------------------------------------
 # Platform install hints
 # -----------------------------------------------------------------------------
-function Node-InstallHint {
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        'winget install -e --id OpenJS.NodeJS.LTS'
-    } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
-        'choco install nodejs-lts -y'
+function Get-InstallSpec {
+    # -> the installer for one dependency as a hashtable, never a bare string:
+    #      Exe     = executable to launch
+    #      Args    = argv, already split (Start-Process needs this; splitting a
+    #                command string would break on quoted args and spaces)
+    #      Display = the whole thing as one line, for "Install command:"
+    #      Url     = the manual download page, always present, so any message
+    #                that needs a link can show a bare URL and nothing else
+    #      Manual  = $true when there is no package manager at all, so the only
+    #                option is a web page. Must never be executed.
+    #
+    # The agreement flags are deliberate. Without them winget can stop on an
+    # interactive source/package agreement prompt, which reads as a hang - the
+    # exact "no progress" symptom this function exists to remove.
+    #
+    # Note the progress reality: winget's percentage covers the DOWNLOAD only.
+    # The MSI install that follows reports an indeterminate spinner, and its
+    # InstallationProgress is 0 via the COM API. So a bar would sit at 100%
+    # through the slow part. Letting winget draw its own renderer is more honest
+    # than faking a percentage we do not have.
+    param([ValidateSet('Node','Postgres')][string]$Kind)
+
+    if ($Kind -eq 'Node') {
+        $id = 'OpenJS.NodeJS.LTS'; $chocoId = 'nodejs-lts'; $url = 'https://nodejs.org/en/download'
     } else {
-        'https://nodejs.org/en/download  (install the LTS build)'
+        $id = 'PostgreSQL.PostgreSQL.16'; $chocoId = 'postgresql16'; $url = 'https://www.postgresql.org/download/windows/'
     }
+
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        # Named $argv, not $args: $args is an automatic variable, and shadowing
+        # it is the kind of thing that behaves differently on PowerShell 5.1.
+        $argv = @('install', '-e', '--id', $id,
+                  '--accept-package-agreements', '--accept-source-agreements')
+        return @{ Exe = 'winget'; Args = $argv; Display = "winget $($argv -join ' ')"; Manual = $false; Url = $url }
+    }
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+        $argv = @('install', $chocoId, '-y')
+        return @{ Exe = 'choco'; Args = $argv; Display = "choco $($argv -join ' ')"; Manual = $false; Url = $url }
+    }
+    return @{ Exe = $null; Args = @(); Display = $url; Manual = $true; Url = $url }
+}
+
+function Node-InstallHint {
+    # Kept as a one-liner so every existing "Fix: $(Node-InstallHint)" message and
+    # the --help text stay accurate whichever package manager is present.
+    (Get-InstallSpec -Kind Node).Display
 }
 
 function Pg-InstallHint {
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        'winget install -e --id PostgreSQL.PostgreSQL.16'
-    } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
-        'choco install postgresql16 -y'
-    } else {
-        'https://www.postgresql.org/download/windows/'
-    }
+    (Get-InstallSpec -Kind Postgres).Display
 }
 
 function Pg-StartHint {
@@ -284,64 +477,257 @@ function Pg-StartHint {
     }
 }
 
-function Offer-Install {
-    param([string]$Label, [string]$Hint)
-    Warn "$Label is missing."
-    Info "Install command: $Hint"
-    if (Confirm 'Install it now?' 'n') {
-        Info "Running: $Hint"
-        try {
-            Invoke-Expression $Hint | Out-Null
-            Ok "$Label installed."
-            # Refresh PATH so the newly installed tool is visible.
-            $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-            $user     = [Environment]::GetEnvironmentVariable('Path', 'User')
-            $env:Path = "$machine;$user"
-            return $true
-        } catch {
-            Err "Install command failed: $Hint"
-            return $false
-        }
+function Invoke-Installer {
+    # Invoke-Installer -Exe <name> -Argv <argv>  -> [int] exit code
+    #
+    # Start-Process with -NoNewWindow is what makes progress output appear at all.
+    # PowerShell captures a native command's stdout through a PIPE in order to
+    # build pipeline objects, and winget builds its progress bar only when stdout
+    # is a real console:
+    #
+    #     if (GetConsoleWidth().has_value())   // AppInstallerCLICore/ExecutionReporter.cpp
+    #
+    # So the old `Invoke-Expression $Hint | Out-Null` guaranteed no progress:
+    #   winget >= 1.29  -> progress suppressed entirely
+    #   winget <  1.29  -> bar spam with mojibake (winget-cli#2582)
+    #
+    # -NoNewWindow inherits the parent console handle, so the bar renders.
+    # -PassThru is required to read ExitCode; a bare native call does not throw
+    # on failure, which is why the old code reported success even when the
+    # installer had failed.
+    param([string]$Exe, [string[]]$Argv = @())
+
+    if (-not (Get-Command $Exe -ErrorAction SilentlyContinue)) {
+        Err "$Exe was not found on PATH."
+        return 127
     }
-    return $false
+    try {
+        $proc = Start-Process -FilePath $Exe -ArgumentList $Argv -NoNewWindow -Wait -PassThru -ErrorAction Stop
+        # Some exit codes are only populated after the handle is refreshed.
+        try { $proc.Refresh() } catch { }
+        return [int]$proc.ExitCode
+    } catch {
+        Err "Could not start '$Exe': $($_.Exception.Message)"
+        return 127
+    }
+}
+
+function Offer-Install {
+    # Offer-Install -Label <name> -Kind Node|Postgres  -> [bool]
+    #
+    # Takes a -Kind rather than a command string, so this function can tell the
+    # difference between "a command we can run" and "a URL a human must open".
+    param([string]$Label, [ValidateSet('Node','Postgres')][string]$Kind)
+
+    $spec = Get-InstallSpec -Kind $Kind
+    Warn "$Label is required."
+
+    if ($spec.Manual) {
+        # There is no package manager on this machine, so there is nothing to
+        # execute. The old code passed this URL to Invoke-Expression, which threw
+        # and reported "Install command failed: https://..." - technically honest
+        # but useless. Say what actually has to happen instead.
+        Info "No winget or choco found, so this cannot be installed automatically."
+        Info "Download and install it from: $($spec.Url)"
+        return $false
+    }
+
+    Info "Install command: $($spec.Display)"
+    if (-not (Confirm 'Install it now?' 'n')) { return $false }
+
+    Info 'Running it now. winget shows its own progress bar; the MSI install'
+    Info 'phase after the download reports a spinner, not a percentage.'
+    Info 'A UAC prompt may appear for a machine-wide install - that is expected.'
+
+    $code = Invoke-Installer -Exe $spec.Exe -Argv $spec.Args
+    if (-not (Test-InstallerSucceeded $code)) {
+        Err "Install failed (exit code $code / 0x$(Get-CodeHex $code)): $($spec.Display)"
+        return $false
+    }
+
+    if ($code -eq 3010 -or $code -eq 1641) {
+        Note "$Label installed; Windows wants a reboot (exit code $code). Continuing."
+    } elseif ((Get-CodeHex $code) -eq '8A15002B') {
+        Note "$Label is already installed - the installer had nothing to do (0x8A15002B)."
+    } else {
+        Ok "$Label installed."
+    }
+
+    # Refresh PATH so the newly installed tool is visible to this process.
+    Update-ProcessPath
+    return $true
 }
 
 # -----------------------------------------------------------------------------
 # Phase 1 - prerequisites
 # -----------------------------------------------------------------------------
+function Get-NodeMajor {
+    # -> the installed major version as an [int], or a negative sentinel:
+    #      -1 = node is not on PATH, -2 = node is there but `node -p` said
+    #      something unparseable. Both are negative so `$major -ge $MinNodeMajor`
+    #      stays false for them.
+    # TryParse instead of a bare [int] cast so an unexpected `node -p` result
+    # cannot become a terminating error under Set-StrictMode /
+    # $ErrorActionPreference = 'Stop'.
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return -1 }
+    $out = @((Invoke-NativeQuiet -Exe node -Rest @(
+        '-p', 'process.versions.node.split(".")[0]'
+    )).Output)
+    # Only the FIRST line is inspected. A wrapper that prints a banner before the
+    # version would otherwise make the whole capture an array and .Trim() would
+    # throw under Set-StrictMode. No output at all is the same unreadable case.
+    $raw = if ($out.Count -gt 0) { $out[0] } else { '' }
+    $major = 0
+    if ([int]::TryParse(("$raw").Trim(), [ref]$major)) { return $major }
+    return -2
+}
+
+function Get-NodeProblem {
+    # -> why Node is unusable right now, or '' when it is usable. Shared by the
+    #    pre-install warning and the post-install re-check so the two cannot
+    #    drift apart.
+    param([int]$Major)
+    if ($Major -ge $MinNodeMajor) { return '' }
+    if ($Major -eq -1) { return 'Node.js is not on PATH.' }
+    if ($Major -eq -2) {
+        return "Node.js is on PATH but 'node -p' did not report a version (a wrapper script or IDE shim may be shadowing it)."
+    }
+    $ver = Get-NodeVersionText
+    return "Node.js $ver is too old (need >= $MinNodeMajor)."
+}
+
+function Join-PathOrNull {
+    # Join-Path, but returns $null instead of throwing when the parent is unset.
+    # Every one of these variables can legitimately be missing on Windows: a
+    # service account or SYSTEM context has no LOCALAPPDATA or APPDATA, and a
+    # trimmed install has no ProgramData. A terminating "Cannot bind argument to
+    # parameter 'Path'" here would abort the whole run over an optional probe -
+    # exactly the failure mode this script must not have.
+    param([string]$Base, [string]$Leaf)
+    if ([string]::IsNullOrWhiteSpace($Base)) { return $null }
+    try { return (Join-Path $Base $Leaf) } catch { return $null }
+}
+
+function Get-NodeCandidateDirs {
+    # Well-known Node install directories, in the order they are probed. Every
+    # entry is checked for node.exe before it is added, so a stale or partial
+    # directory cannot put a broken path on PATH.
+    $candidates = @(
+        (Join-PathOrNull $env:ProgramFiles 'nodejs')
+        (Join-PathOrNull ${env:ProgramFiles(x86)} 'nodejs')
+        (Join-PathOrNull $env:LOCALAPPDATA 'Programs\nodejs')
+        (Join-PathOrNull $env:APPDATA 'npm')
+        (Join-PathOrNull $env:ProgramData 'nvm')
+        (Join-PathOrNull $env:APPDATA 'nvm')
+    )
+
+    $found = @()
+    foreach ($d in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($d)) { continue }
+        if (Test-Path (Join-Path $d 'node.exe')) { $found += $d }
+    }
+    # `,$found` forces an array through the pipeline. Without it a single hit is
+    # unrolled to a bare [string] by PowerShell's output enumeration, and the
+    # caller's .Count then throws under Set-StrictMode 2.0.
+    return ,$found
+}
+
+function Resolve-NodeOnPath {
+    # -> [bool] $true when `node` is callable in THIS process afterwards.
+    #
+    # Re-reads PATH from the registry first (an installer wrote the new entry
+    # there, not into this process), then falls back to the well-known install
+    # directories. The fallback is what fixes a Node that is installed and
+    # working but invisible to the running terminal - the common case after an
+    # install, or with an nvm/shim setup whose PATH entry lives only in the
+    # session that started it.
+    Update-ProcessPath
+    if (Get-Command node -ErrorAction SilentlyContinue) { return $true }
+
+    foreach ($dir in (Get-NodeCandidateDirs)) {
+        $env:Path = "$dir;$env:Path"
+        if (Get-Command node -ErrorAction SilentlyContinue) {
+            Info "Found Node.js in $dir (added to this session's PATH)."
+            return $true
+        }
+    }
+    return $false
+}
+
+function Ensure-Node {
+    # Establishes whether Node/npm are usable, and NEVER aborts setup.
+    #
+    # The old version ended in Die, which meant a stale-PATH machine (Node
+    # installed, winget answering 0x8A15002B "already installed") stopped the
+    # whole run before the .env, the database and the dependencies. Node is a
+    # prerequisite for SOME steps, not for all of them, so a missing toolchain
+    # now downgrades those steps to "skipped, here's why" and the rest of setup
+    # carries on.
+    $major = Get-NodeMajor
+    $ver   = Get-NodeVersionText
+
+    if ($major -lt $MinNodeMajor) {
+        Warn (Get-NodeProblem $major)
+
+        # Best effort: offer the install, but never let the installer's own exit
+        # code decide the outcome. Only the verification below is authoritative.
+        [void](Offer-Install -Label "Node.js (>= $MinNodeMajor)" -Kind Node)
+    }
+
+    if (Resolve-NodeOnPath) {
+        $major = Get-NodeMajor
+        $ver   = Get-NodeVersionText
+        $script:NodeReady = $true
+
+        if ($major -ge $MinNodeMajor) {
+            # No upper bound is enforced or warned about. The old ">20" warning
+            # was actively misleading: it told users on Node 22/24 (which work
+            # fine) to downgrade to Node 18, which has been end-of-life since
+            # April 2025. See README "Prerequisites" for the rationale.
+            Ok "Node.js $ver  (need >= $MinNodeMajor)"
+        } else {
+            # Usable, but too old for this project. Proceeding is the caller's
+            # decision, not ours - warn clearly and let setup continue.
+            Warn "Node.js $ver is below the required $MinNodeMajor. Upgrade it:"
+            Info '  winget install OpenJS.NodeJS.LTS    (or nodejs.org/en/download)'
+            Info 'Continuing anyway - npm may fail on this version.'
+        }
+    } else {
+        $script:NodeReady = $false
+        Err 'Node.js is still not usable after attempting to install it.'
+        Info 'Searched PATH (registry + this session) and these directories:'
+        foreach ($dir in (Get-NodeCandidateDirs)) { Info "  $dir" }
+        Info "Install it with: $(Node-InstallHint)"
+        Info 'Continuing. The steps that need npm will be skipped - re-run setup'
+        Info 'after Node is installed to complete them.'
+    }
+}
+
 function Check-Prereqs {
     Step 'Checking prerequisites'
 
     # --- Node.js -------------------------------------------------------------
-    if (Get-Command node -ErrorAction SilentlyContinue) {
-        $nodeMajor = [int](node -p 'process.versions.node.split(".")[0]')
-        $nodeVer   = (node -v)
-        if ($nodeMajor -ge $MinNodeMajor) {
-            Ok "Node.js $nodeVer  (need >= $MinNodeMajor)"
-        } else {
-            Die "Node.js $nodeVer is too old. Need >= $MinNodeMajor. Fix: $(Node-InstallHint)"
-        }
-        if ($nodeMajor -gt 20) {
-            Warn "Node $nodeVer is newer than the documented target (v18)."
-            Note "If 'npm start' fails to compile the frontend, install Node 18 LTS and re-run."
-        }
-    } else {
-        if (-not (Offer-Install "Node.js (>= $MinNodeMajor)" (Node-InstallHint))) {
-            Die "Node.js is required and was not installed."
-        }
-        if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Die 'Node.js still not on PATH. Open a new terminal and re-run.' }
-    }
+    Ensure-Node
 
     # --- npm -----------------------------------------------------------------
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Die "npm is missing. It ships with Node.js - reinstall Node, or see: $(Node-InstallHint)"
+    # npm.cmd ships in the same directory as node.exe, so Resolve-NodeOnPath
+    # above normally makes it resolvable too. This stays a warning: without it,
+    # `& npm ci` throws CommandNotFoundException and $ErrorActionPreference='Stop'
+    # turns that into an opaque crash instead of the message below.
+    $script:NpmReady = $script:NodeReady -and [bool](Get-Command npm -ErrorAction SilentlyContinue)
+    if ($script:NpmReady) {
+        $npmVer = @((Invoke-NativeQuiet -Exe npm -Rest @('-v')).Output)
+        Ok "npm v$($npmVer -join ' ')"
+    } else {
+        Warn 'npm is not available. It ships with Node.js.'
+        Info "Once Node is installed: $(Node-InstallHint)"
+        Add-SkippedStep 'npm-dependent steps' 'npm was not found'
     }
-    Ok "npm v$(npm -v)"
 
     # --- PostgreSQL ----------------------------------------------------------
     if (-not (Get-Command psql -ErrorAction SilentlyContinue) -and
         -not (Get-Command pg_isready -ErrorAction SilentlyContinue)) {
-        if (-not (Offer-Install "PostgreSQL (>= $MinPgMajor)" (Pg-InstallHint))) {
+        if (-not (Offer-Install -Label "PostgreSQL (>= $MinPgMajor)" -Kind Postgres)) {
             Die "PostgreSQL is required and was not installed."
         }
     }
@@ -369,8 +755,8 @@ function Check-Prereqs {
 
 function Test-PostgresReady {
     if (Get-Command pg_isready -ErrorAction SilentlyContinue) {
-        pg_isready -h $DbHost -p $DbPort -q 2>$null
-        return ($LASTEXITCODE -eq 0)
+        $r = Invoke-NativeQuiet -Exe pg_isready -Rest @('-h', $DbHost, '-p', $DbPort, '-q')
+        return ($r.ExitCode -eq 0)
     }
     # No pg_isready: fall back to a TCP probe via .NET.
     try {
@@ -425,6 +811,39 @@ function New-JwtSecret {
     return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
+# Every key of backend/.env, with the default used when the user presses Enter.
+# The password is the only one with no default - an empty DB_PASSWORD cannot
+# work, so it must be typed.
+$script:EnvDefaults = [ordered]@{
+    'PORT'                = '5000'
+    'DB_HOST'             = 'localhost'
+    'DB_PORT'             = '5432'
+    'DB_NAME'             = 'jasasane_app'
+    'DB_USER'             = 'postgres'
+    'DB_PASSWORD'         = ''
+    'JWT_SECRET'          = 'your_super_secret_key_change_this'
+    'OTP_EXPIRY_MINUTES'  = '5'
+    'MAX_LOGIN_ATTEMPTS'  = '3'
+    'LOCKOUT_MINUTES'     = '15'
+}
+
+function Get-EnvLabel {
+    param([string]$Key)
+    switch ($Key) {
+        'PORT'               { return 'PORT - backend API port' }
+        'DB_HOST'            { return 'DB_HOST - PostgreSQL host' }
+        'DB_PORT'            { return 'DB_PORT - PostgreSQL port' }
+        'DB_NAME'            { return 'DB_NAME - database to create' }
+        'DB_USER'            { return 'DB_USER - PostgreSQL user' }
+        'DB_PASSWORD'        { return 'DB_PASSWORD - password for that user' }
+        'JWT_SECRET'         { return 'JWT_SECRET - token signing key' }
+        'OTP_EXPIRY_MINUTES' { return 'OTP_EXPIRY_MINUTES - OTP lifetime' }
+        'MAX_LOGIN_ATTEMPTS' { return 'MAX_LOGIN_ATTEMPTS - logins before lockout' }
+        'LOCKOUT_MINUTES'    { return 'LOCKOUT_MINUTES - lockout duration' }
+    }
+    return $Key
+}
+
 function Write-EnvFile {
     param([string]$File)
     $content = @(
@@ -435,11 +854,106 @@ function Write-EnvFile {
         "DB_USER=$DbUser"
         "DB_PASSWORD=$DbPassword"
         "JWT_SECRET=$JwtSecret"
-        'OTP_EXPIRY_MINUTES=5'
-        'MAX_LOGIN_ATTEMPTS=3'
-        'LOCKOUT_MINUTES=15'
+        "OTP_EXPIRY_MINUTES=$OtpExpiryMinutes"
+        "MAX_LOGIN_ATTEMPTS=$MaxLoginAttempts"
+        "LOCKOUT_MINUTES=$LockoutMinutes"
     ) -join "`r`n"
     [IO.File]::WriteAllText($File, $content + "`r`n")
+}
+
+function Show-EnvSummary {
+    param([string]$File)
+    # Prints the values setup is about to use. The password is masked - this
+    # goes to a terminal scrollback and often into a shared terminal recording.
+    Info 'Resolved configuration:'
+    foreach ($key in $script:EnvDefaults.Keys) {
+        $value = Get-EnvValue $File $key
+        if ($key -eq 'DB_PASSWORD') { $value = if ($value) { '<set>' } else { '<empty>' } }
+        if ($key -eq 'JWT_SECRET') { $value = '<set>' }
+        if ([string]::IsNullOrWhiteSpace($value)) { $value = '<empty>' }
+        Info ("  {0,-19} {1}" -f $key, $value)
+    }
+    Info "  DB      ${DbUser}@${DbHost}:${DbPort}/${DbName}"
+    Info "  Backend  http://localhost:$ApiPort"
+}
+
+function Read-EnvField {
+    # Read-EnvField -Key <name> -Label <text> [-Current <value>] [-Secret]
+    #   -> the value for one .env key.
+    #
+    # The prompt shows [-Current] as the default, so pressing Enter keeps what
+    # setup would otherwise use (an existing .env value, or a switch). With no
+    # console (piped/CI) there is nothing to ask, so the current value is used
+    # and the fact is stated - a prompt that cannot be answered must not become a
+    # stop.
+    param(
+        [string]$Key,
+        [string]$Label,
+        [string]$Current = '',
+        [switch]$Secret
+    )
+
+    $default = if ($Current) { $Current } else { $script:EnvDefaults[$Key] }
+
+    if (-not (Test-Interactive)) {
+        Info "$Label = $default  (not prompted: no console)"
+        return $default
+    }
+
+    if ($Secret) {
+        $typed = Read-Secret $Label
+        if ($typed) { return $typed }
+        if ($Current) { return $Current }
+        return ''
+    }
+    return (Read-Value $Label $default)
+}
+
+function Read-EnvSettings {
+    # Prompts for every key in backend/.env, in the same order as the file, each
+    # showing the value that pressing Enter would keep.
+    $envFile = Join-Path $BackendDir '.env'
+
+    if (-not $script:PortGiven) {
+        $portNow = Get-EnvValue $envFile 'PORT'
+        if (-not $portNow) { $portNow = $script:EnvDefaults['PORT'] }
+        $script:ApiPort = Read-EnvField -Key 'PORT' -Label (Get-EnvLabel 'PORT') -Current $portNow
+        if ("$ApiPort" -ne '5000') {
+            Warn "PORT=$ApiPort, but the frontend hardcodes http://localhost:5000."
+            Info 'frontend/src/services/api.js must be edited to match, or no API call will work.'
+        }
+    }
+
+    $script:DbHost = Read-EnvField -Key 'DB_HOST' -Label (Get-EnvLabel 'DB_HOST') -Current $DbHost
+    $script:DbPort = Read-EnvField -Key 'DB_PORT' -Label (Get-EnvLabel 'DB_PORT') -Current $DbPort
+    $script:DbName = Read-EnvField -Key 'DB_NAME' -Label (Get-EnvLabel 'DB_NAME') -Current $DbName
+    $script:DbUser = Read-EnvField -Key 'DB_USER' -Label (Get-EnvLabel 'DB_USER') -Current $DbUser
+
+    if ($TrustLocalAuth) {
+        $script:DbPassword = ''
+        Info '-TrustLocalAuth: not asking for a password (PostgreSQL trusts local connections)'
+    } else {
+        $script:DbPassword = Read-EnvField -Key 'DB_PASSWORD' -Label (Get-EnvLabel 'DB_PASSWORD') -Current $DbPassword -Secret
+        if (-not $DbPassword) {
+            Warn 'No DB_PASSWORD. Setup will try the connection anyway and report if it is rejected.'
+        }
+    }
+
+    $script:JwtSecret = Read-EnvField -Key 'JWT_SECRET' -Label (Get-EnvLabel 'JWT_SECRET') -Current $JwtSecret
+    if ($JwtSecret -eq 'random') {
+        # The literal default is a known value, so offer a way out of it that does
+        # not require the user to invent a long string by hand.
+        $script:JwtSecret = New-JwtSecret
+        Ok 'Generated a fresh 48-byte JWT_SECRET.'
+    } elseif ($JwtSecret -eq $script:EnvDefaults['JWT_SECRET']) {
+        Warn 'Using the default JWT_SECRET. Anyone who knows it can forge login tokens.'
+        Info "Type 'random' at that prompt for a generated one."
+        Info 'Change it before anyone else can reach this app.'
+    }
+
+    $script:OtpExpiryMinutes = Read-EnvField -Key 'OTP_EXPIRY_MINUTES' -Label (Get-EnvLabel 'OTP_EXPIRY_MINUTES') -Current $OtpExpiryMinutes
+    $script:MaxLoginAttempts = Read-EnvField -Key 'MAX_LOGIN_ATTEMPTS' -Label (Get-EnvLabel 'MAX_LOGIN_ATTEMPTS') -Current $MaxLoginAttempts
+    $script:LockoutMinutes    = Read-EnvField -Key 'LOCKOUT_MINUTES'    -Label (Get-EnvLabel 'LOCKOUT_MINUTES')    -Current $LockoutMinutes
 }
 
 function Ensure-Env {
@@ -449,57 +963,54 @@ function Ensure-Env {
     $example = Join-Path $BackendDir '.env.example'
     $existing = Test-Path $envFile
 
-    if ($existing) {
-        Ok 'backend/.env already exists - reusing it (it is never overwritten)'
-    } else {
-        if (-not (Test-Path $example)) { Die 'backend/.env.example is missing; cannot create backend/.env' }
-        Info 'Creating backend/.env from backend/.env.example'
-    }
-
-    $script:DbName     = Read-EnvValue 'DB_NAME'     $DbName
-    $script:DbUser     = Read-EnvValue 'DB_USER'     $DbUser
-    $script:DbPassword = Read-EnvValue 'DB_PASSWORD' $DbPassword
-    $script:DbHost     = Read-EnvValue 'DB_HOST'     $DbHost
-    $script:DbPort     = Read-EnvValue 'DB_PORT'     $DbPort
-    $script:JwtSecret  = Read-EnvValue 'JWT_SECRET'  $JwtSecret
+    # Seed the script-scoped values from the switches, then from the existing
+    # file. Anything supplied explicitly always wins over the file.
+    $script:DbHost             = Read-EnvValue 'DB_HOST'             $DbHost
+    $script:DbPort             = Read-EnvValue 'DB_PORT'             $DbPort
+    $script:DbName             = Read-EnvValue 'DB_NAME'             $DbName
+    $script:DbUser             = Read-EnvValue 'DB_USER'             $DbUser
+    $script:DbPassword         = Read-EnvValue 'DB_PASSWORD'         $DbPassword
+    $script:JwtSecret          = Read-EnvValue 'JWT_SECRET'          $JwtSecret
+    # No switch exists for the three tuning keys, so they come from the file and
+    # fall back to the documented defaults. Read-EnvValue returns $Current
+    # unchanged when it is set, so it must be passed '' to consult the file at all.
+    $script:OtpExpiryMinutes   = Read-EnvValue 'OTP_EXPIRY_MINUTES'  ''
+    if (-not $OtpExpiryMinutes) { $script:OtpExpiryMinutes = $script:EnvDefaults['OTP_EXPIRY_MINUTES'] }
+    $script:MaxLoginAttempts   = Read-EnvValue 'MAX_LOGIN_ATTEMPTS'  ''
+    if (-not $MaxLoginAttempts) { $script:MaxLoginAttempts = $script:EnvDefaults['MAX_LOGIN_ATTEMPTS'] }
+    $script:LockoutMinutes     = Read-EnvValue 'LOCKOUT_MINUTES'     ''
+    if (-not $LockoutMinutes) { $script:LockoutMinutes = $script:EnvDefaults['LOCKOUT_MINUTES'] }
 
     if ($existing) {
         $envPort = Get-EnvValue $envFile 'PORT'
-        if ($envPort -and $envPort -ne $ApiPort) {
+        if ($envPort -and -not $script:PortGiven) {
             $script:ApiPort = $envPort
             Info "Using PORT=$ApiPort from the existing backend/.env"
         }
+        Show-EnvSummary $envFile
+        # Never overwrite silently. A working DB password must not be discarded
+        # just because the file was seen again on a re-run.
+        if (Confirm 'Keep these values, or re-enter them?' 'y') { return }
+        Info 'Re-asking every value in backend/.env ...'
+        Read-EnvSettings
+    } else {
+        if (-not (Test-Path $example)) { Die 'backend/.env.example is missing; cannot create backend/.env' }
+        Info 'Creating backend/.env - press Enter to accept each default.'
+        Read-EnvSettings
     }
 
-    if (-not $DbName) { $script:DbName = 'jasasane_app' }
-    if (-not $DbUser) { $script:DbUser = Read-Value 'PostgreSQL user' 'postgres' }
-    if ($TrustLocalAuth) {
-        $script:DbPassword = ''
-        Info '-TrustLocalAuth: not asking for a password (PostgreSQL trusts local connections)'
-    } elseif (-not $DbPassword) {
-        $script:DbPassword = Read-Secret "PostgreSQL password for '$DbUser'"
-        if (-not $DbPassword) {
-            Die "An empty password was supplied. Check the password for '$DbUser' and try again."
-        }
-    }
-    if (-not $JwtSecret) {
-        $script:JwtSecret = New-JwtSecret
-        Info 'Generated a fresh 48-byte JWT_SECRET'
-    }
-
-    if ($existing) {
-        Info 'Resolved configuration:'
-        Info "  DB      ${DbUser}@${DbHost}:${DbPort}/${DbName}"
-        Info "  Backend  http://localhost:$ApiPort"
-        return
+    foreach ($pair in @(@($ApiPort,'PORT'),
+                        @($OtpExpiryMinutes,'OTP_EXPIRY_MINUTES'),
+                        @($MaxLoginAttempts,'MAX_LOGIN_ATTEMPTS'),
+                        @($LockoutMinutes,'LOCKOUT_MINUTES'))) {
+        if ("$($pair[0])" -notmatch '^\d+$') { Die "$($pair[1]) must be a number, got '$($pair[0])'" }
     }
 
     Write-EnvFile $envFile
     # Best effort: restrict to the current user. Windows ACLs need icacls.
-    try { icacls $envFile /inheritance:r /grant:r "$($env:USERNAME):(R,W)" 2>$null | Out-Null } catch { }
+    try { (Invoke-NativeQuiet -Exe icacls -Rest @($envFile, '/inheritance:r', '/grant:r', "$($env:USERNAME):(R,W)")) | Out-Null } catch { }
     Ok 'Wrote backend/.env (gitignored)'
-    Info "  DB      ${DbUser}@${DbHost}:${DbPort}/${DbName}"
-    Info "  Backend  http://localhost:$ApiPort"
+    Show-EnvSummary $envFile
 }
 
 # -----------------------------------------------------------------------------
@@ -514,9 +1025,15 @@ function Invoke-Psql {
     $prev = $env:PGPASSWORD
     $env:PGPASSWORD = $DbPassword
     try {
-        $out = & psql -h $DbHost -p $DbPort -U $DbUser -d $Database `
-                      -v ON_ERROR_STOP=1 -tAc $Sql 2>$null
-        return $out
+        $r = Invoke-NativeQuiet -Exe psql -Rest @(
+            '-h', $DbHost,
+            '-p', $DbPort,
+            '-U', $DbUser,
+            '-d', $Database,
+            '-v', 'ON_ERROR_STOP=1',
+            '-tAc', $Sql
+        )
+        return $r.Output
     } finally {
         $env:PGPASSWORD = $prev
     }
@@ -569,17 +1086,23 @@ function Ensure-Database {
     }
 
     # 2. Create the database if it is missing.
-    $exists = Invoke-Psql 'postgres' "SELECT 1 FROM pg_database WHERE datname = '$DbName';"
-    if ("$exists".Trim() -eq '1') {
+    $exists = @(Invoke-Psql 'postgres' "SELECT 1 FROM pg_database WHERE datname = '$DbName';")
+    if ("$($exists[0])".Trim() -eq '1') {
         Ok "Database '$DbName' already exists"
     } else {
         Info "Creating database '$DbName'"
         $prev = $env:PGPASSWORD
         $env:PGPASSWORD = $DbPassword
         try {
-            & psql -h $DbHost -p $DbPort -U $DbUser -d postgres -v ON_ERROR_STOP=1 `
-                   -tAc "CREATE DATABASE `"$DbName`";" 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) { Ok "Created database '$DbName'" }
+            $created = Invoke-NativeQuiet -Exe psql -Rest @(
+                '-h', $DbHost,
+                '-p', $DbPort,
+                '-U', $DbUser,
+                '-d', 'postgres',
+                '-v', 'ON_ERROR_STOP=1',
+                '-tAc', "CREATE DATABASE `"$DbName`";"
+            )
+            if ($created.ExitCode -eq 0) { Ok "Created database '$DbName'" }
             else {
                 Err "CREATE DATABASE '$DbName' failed."
                 Info "If the name is not a valid identifier, pass a simpler one: -DbName myapp"
@@ -607,12 +1130,19 @@ function Ensure-Database {
 # Phase 4 - dependencies
 # -----------------------------------------------------------------------------
 function Install-Deps {
+    # -> [bool] $true when the dependencies are in place afterwards.
     param([string]$Dir, [string]$Label, [string]$Sentinel)
+
+    if (-not $script:NpmReady) {
+        Warn "Skipping the $Label dependencies - npm is not available."
+        Add-SkippedStep "$Label dependencies (npm ci)" 'npm was not found'
+        return $false
+    }
 
     $sentinelPath = Join-Path $Dir "node_modules\$Sentinel\package.json"
     if (Test-Path $sentinelPath) {
         Ok "$Label dependencies already installed (found $Sentinel)"
-        return
+        return $true
     }
 
     Info "Installing $Label dependencies (this can take a few minutes)..."
@@ -620,11 +1150,11 @@ function Install-Deps {
     try {
         if (Test-Path (Join-Path $Dir 'package-lock.json')) {
             & npm ci --no-audit --no-fund
-            if ($LASTEXITCODE -eq 0) { Ok "$Label dependencies installed (npm ci)"; return }
+            if ($LASTEXITCODE -eq 0) { Ok "$Label dependencies installed (npm ci)"; return $true }
             Warn "'npm ci' failed. Retrying with 'npm install' ..."
         }
         & npm install --no-audit --no-fund
-        if ($LASTEXITCODE -eq 0) { Ok "$Label dependencies installed (npm install)"; return }
+        if ($LASTEXITCODE -eq 0) { Ok "$Label dependencies installed (npm install)"; return $true }
     } finally {
         Pop-Location
     }
@@ -635,19 +1165,36 @@ function Install-Deps {
         Info 'your platform you will need Visual Studio Build Tools:'
         Info '  npm install --global windows-build-tools'
     }
-    Die "Cannot continue without $Label dependencies."
+    Add-SkippedStep "$Label dependencies" 'npm install failed'
+    return $false
 }
 
-function Install-Dependencies {
-    Step 'Installing dependencies'
-    Install-Deps $BackendDir  'backend'  'express'
-    Install-Deps $FrontendDir 'frontend' 'react-scripts'
+function Install-BackendDependencies {
+    # [void] - a bare call would emit Install-Deps' [bool] return into the output
+    # stream and print "True" in the middle of the run.
+    [void](Install-Deps $BackendDir  'backend'  'express')
+}
+
+function Install-FrontendDependencies {
+    [void](Install-Deps $FrontendDir 'frontend' 'react-scripts')
 }
 
 # -----------------------------------------------------------------------------
-# Phase 5 - seed (opt-in, destructive)
+# Phase 5 - seed (destructive, runs by default, needs typed confirmation)
 # -----------------------------------------------------------------------------
 function Invoke-Seed {
+    # -> [bool] $true when the database was actually seeded.
+    if (-not $script:NpmReady) {
+        Warn 'Skipping the seed - npm is not available.'
+        Add-SkippedStep 'seed data' 'npm was not found'
+        return $false
+    }
+    if (-not (Test-Path (Join-Path $BackendDir 'node_modules\express\package.json'))) {
+        Warn 'Skipping the seed - the backend dependencies are not installed yet.'
+        Add-SkippedStep 'seed data' 'backend dependencies missing'
+        return $false
+    }
+
     Step 'Seeding demo data'
     Warn 'The seed script is DESTRUCTIVE. It will:'
     Info "  * DELETE every row from the 'records' table"
@@ -657,14 +1204,19 @@ function Invoke-Seed {
 
     if (-not (Confirm-Typed 'Proceed with seeding?' 'SEED')) {
         Info 'Seed cancelled. Existing data left untouched.'
-        return
+        return $false
     }
 
     Push-Location $BackendDir
     try {
         & npm run seed
-        if ($LASTEXITCODE -ne 0) { Die 'Seeding failed.' }
+        if ($LASTEXITCODE -ne 0) {
+            Err 'Seeding failed.'
+            Add-SkippedStep 'seed data' 'npm run seed exited non-zero'
+            return $false
+        }
         Ok 'Seed complete.'
+        return $true
     } finally { Pop-Location }
 }
 
@@ -675,11 +1227,13 @@ function Get-UnixListenerPids {
     param([int]$Port)
     $pids = @()
     if (Get-Command lsof -ErrorAction SilentlyContinue) {
-        $out = & lsof -ti "tcp:$Port" -sTCP:LISTEN 2>$null
+        $out = (Invoke-NativeQuiet -Exe lsof -Rest @('-ti', "tcp:$Port", '-sTCP:LISTEN')).Output
         if ($out) { $pids = @($out | ForEach-Object { [int]$_ }) }
     }
     if ($pids.Count -eq 0 -and (Get-Command ss -ErrorAction SilentlyContinue)) {
-        $out = & ss -ltnp 2>$null | Select-String -Pattern "[:.]$Port\s"
+        # Select-String operates on each element of .Output, so .Matches stays valid
+        # here - this must NOT be collapsed into a single string.
+        $out = (Invoke-NativeQuiet -Exe ss -Rest @('-ltnp')).Output | Select-String -Pattern "[:.]$Port\s"
         if ($out) { $pids = @($out | ForEach-Object { ([regex]::Matches($_, 'pid=(\d+)') | ForEach-Object { [int]$_.Groups[1].Value }) }) }
     }
     return @($pids | Where-Object { $_ -gt 0 })
@@ -688,7 +1242,7 @@ function Get-UnixListenerPids {
 function Get-NetstatListenerPids {
     param([int]$Port)
     if (-not (Get-Command netstat -ErrorAction SilentlyContinue)) { return @() }
-    $line = & netstat -ano 2>$null | Select-String -Pattern "[:.]$Port\s+.*LISTENING\s+(\d+)\s*$"
+    $line = (Invoke-NativeQuiet -Exe netstat -Rest @('-ano')).Output | Select-String -Pattern "[:.]$Port\s+.*LISTENING\s+(\d+)\s*$"
     if ($line) { return @($line | ForEach-Object { [int]$_.Matches[0].Groups[1].Value }) }
     return @()
 }
@@ -791,7 +1345,10 @@ function Get-DescendantPids {
     }
 
     if (Get-Command ps -ErrorAction SilentlyContinue) {
-        $lines = & ps -eo pid=,ppid= 2>$null
+        # 'pid=,ppid=' must be passed as ONE argument. Written bare in the source it
+        # parsed as two ('pid=' and 'ppid=') because a bare comma is PowerShell's
+        # array operator, so ps rejected the format string.
+        $lines = (Invoke-NativeQuiet -Exe ps -Rest @('-eo', 'pid=,ppid=')).Output
         foreach ($line in $lines) {
             $parts = (($line -replace '\s+', ' ').Trim()) -split ' '
             if ($parts.Count -ge 2) {
@@ -824,7 +1381,7 @@ function Get-AncestorPids {
                 if (-not $me) { break }
                 $ppid = [int]$me.ParentProcessId
             } else {
-                $line = & ps -eo pid=,ppid= 2>$null | Select-String -Pattern "^\s*$current\s+(\d+)\s*$"
+                $line = (Invoke-NativeQuiet -Exe ps -Rest @('-eo', 'pid=,ppid=')).Output | Select-String -Pattern "^\s*$current\s+(\d+)\s*$"
                 if (-not $line) { break }
                 $ppid = [int]$line.Matches[0].Groups[1].Value
             }
@@ -984,6 +1541,12 @@ function Resolve-Relative {
 }
 
 function Start-Services {
+    if (-not $script:NpmReady) {
+        Warn 'Skipping -Start: npm is not available, so the app cannot be launched.'
+        Add-SkippedStep 'start the backend and frontend' 'npm was not found'
+        return
+    }
+
     Step 'Starting services'
     if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
@@ -1035,6 +1598,12 @@ function Start-Services {
 }
 
 function Start-BackendForeground {
+    if (-not $script:NpmReady) {
+        Warn 'Cannot start the backend: npm is not available.'
+        Add-SkippedStep 'run the backend in the foreground' 'npm was not found'
+        return
+    }
+
     Step 'Starting the backend with nodemon (foreground)'
     Info 'Press Ctrl+C to stop.'
     Push-Location $BackendDir
@@ -1130,16 +1699,32 @@ function Show-Summary {
 }
 
 function Show-SetupSummary {
-    $seeded = if ($DoSeed) { 'yes' } else { 'no' }
-    $blog   = Resolve-Relative $BackendLog
+    $blog = Resolve-Relative $BackendLog
+
+    if ($script:Skipped.Count -gt 0) {
+        Write-Host ''
+        Write-Host '  SETUP INCOMPLETE' -ForegroundColor Yellow
+        Write-Host '  Some steps could not run:' -ForegroundColor Yellow
+        foreach ($s in $script:Skipped) {
+            Write-Host ("    - {0}  ({1})" -f $s.Step, $s.Reason) -ForegroundColor Yellow
+        }
+        Write-Host ''
+        Write-Host '  Fix the cause above, then re-run setup - it resumes where it left'
+        Write-Host '  off and re-uses backend/.env as it is.'
+        Write-Host ''
+    }
 
     Write-Host ''
-    Write-Host '  Setup complete - nothing was started' -ForegroundColor Green
+    if ($script:Skipped.Count -gt 0) {
+        Write-Host '  Setup finished with skipped steps - nothing was started' -ForegroundColor Yellow
+    } else {
+        Write-Host '  Setup complete - nothing was started' -ForegroundColor Green
+    }
     Write-Host ''
     Write-Host "    Database   ${DbUser}@${DbHost}:${DbPort}/${DbName}"
-    Write-Host '    Backend    .env written, dependencies installed'
-    Write-Host '    Frontend   dependencies installed'
-    Write-Host "    Seeded     $seeded"
+    Write-Host '    Backend    .env written'
+    Write-Host "    Frontend   dependencies $(if ($script:NpmReady) { 'installed' } else { 'NOT installed' })"
+    Write-Host "    Seeded     $(if ($DoSeed) { 'requested' } else { 'no (-NoSeed)' })"
     Write-Host ''
     Write-Host '  Run the app' -ForegroundColor White
     Write-Host ''
@@ -1183,9 +1768,17 @@ function Invoke-Main {
     Check-Prereqs
     Ensure-Env
     Ensure-Database
-    Install-Dependencies
 
-    if ($DoSeed) { Invoke-Seed }
+    # The order matters and is deliberate: the seed needs the backend
+    # dependencies (it requires bcrypt), and it creates its own tables via
+    # backend/src/models/init.js, so it does not need the backend running.
+    Step 'Installing backend dependencies'
+    Install-BackendDependencies
+
+    if ($DoSeed) { [void](Invoke-Seed) }
+
+    Step 'Installing frontend dependencies'
+    Install-FrontendDependencies
 
     # Setup is complete at this point. Starting the app is opt-in (-Start / -Dev).
     if (-not $DoStart) {
