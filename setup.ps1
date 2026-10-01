@@ -70,12 +70,27 @@ $FrontendPort = 3000
 
 # True only when -Port was passed, so an explicit 5000 is not re-prompted for.
 $script:PortGiven = $false
+# Same idea for the database coordinates. Check-Prereqs waits for PostgreSQL
+# before Ensure-Env reads backend/.env, so without these it would probe
+# localhost:5432 regardless of where the .env says the database actually is.
+$script:DbHostGiven = $false
+$script:DbPortGiven = $false
 
 $AssumeYes = $false
-$DoSeed    = $true
+# Seeding is destructive, so it is opt-in on every platform. It used to default
+# to $true here, which meant every plain `setup.bat` stopped to ask for the word
+# SEED even on a machine that was already fully set up and had data worth
+# keeping. setup.sh has always defaulted it off.
+$DoSeed    = $false
 $DoStart   = $false
 $RunDev    = $false
 $TrustLocalAuth = $false
+# Re-enter every backend/.env key even though the file exists. Off by default, so
+# an existing file is reused without asking.
+$ReconfigureEnv = $false
+# Check for / install the OpenCode CLI. Off by default: it is a global npm install
+# that the app itself does not need, so it happens only when asked for.
+$OpenCode = $false
 $Mode      = 'setup'
 
 # Toolchain state, decided once in Check-Prereqs and read by every step that
@@ -285,20 +300,33 @@ setup.ps1 - one-command setup for the membership app (backend + frontend)
   A missing Node/npm never stops the run: the steps that need it are reported
   as skipped and everything else is done.
 
+  Nothing is asked when the prerequisite is already there. Node, npm and psql
+  are probed on PATH and in their well-known install directories (psql ships in
+  C:\Program Files\PostgreSQL\<version>\bin, which the installer leaves off
+  PATH), and an existing backend/.env is reused as it is. Install prompts and
+  configuration prompts appear only for what is genuinely missing.
+
   Steps, in order:
     1. node --version          (installing Node.js if it is missing)
-    2. psql --version          (installing PostgreSQL if it is missing)
-    3. backend/.env            (prompts for every value, press Enter for the default)
+    2. psql --version          (starting the postgresql-* service if it is
+                                stopped; installing PostgreSQL if it is missing)
+    3. backend/.env            (prompted for every value only when it is
+                                missing, or when -ReconfigureEnv is passed)
     4. create the database named in backend/.env
     5. npm ci in backend
-    6. seed the demo data      (DESTRUCTIVE, asks you to type SEED)
+    6. seed the demo data      (DESTRUCTIVE, opt-in via -Seed, asks you to
+                                type SEED)
     7. npm ci in frontend
+    8. OpenCode CLI            (only with -OpenCode: reports the installed
+                                version, or offers to install it)
 
 MODES
   .\setup.ps1                      Set up everything. Starts nothing.
   -Start                           Also start backend + frontend in the background
-  -Seed                            Seed demo data (on by default; forces it on)
-  -NoSeed                          Skip the seed step
+  -Seed                            Seed demo data (off by default; asks you to
+                                   type SEED, then does it)
+  -NoSeed                          Skip the seed step (the default, kept for
+                                   clarity in scripts)
   -Status                          Report what is currently running
   -Stop                            Stop backend + frontend
   -Logs                            Tail both logs (Ctrl+C to stop)
@@ -306,8 +334,9 @@ MODES
 
 DATABASE
   Every value below is prompted for in backend/.env when the file does not exist
-  yet. Press Enter to keep the default. When backend/.env already exists its
-  values are shown and you are asked whether to keep them.
+  yet. Press Enter to keep the default. An existing backend/.env is reused and
+  never rewritten: its values are printed (secrets masked) and setup moves on.
+  Pass -ReconfigureEnv to be asked again and have the file rewritten.
 
   -DbName NAME        Database to create/use        (default: jasasane_app)
   -DbUser USER        PostgreSQL user               (default: postgres)
@@ -333,6 +362,13 @@ PORTS
   changing -Port also requires editing that file.
 
 OTHER
+  -OpenCode            Check the OpenCode CLI: print its version when it is
+                         installed, or offer to install opencode-ai@latest
+                         globally via npm when it is not. Also writes
+                         opencode.json if that file does not exist. Nothing is
+                         installed without confirmation.
+  -ReconfigureEnv    Re-ask every backend/.env value and rewrite the file,
+                       even though it already exists
   -Dev                Run the backend with nodemon in the foreground
                         (implies -Start, but the frontend stays stopped)
   -Yes                Assume yes for every prompt (non-interactive use)
@@ -347,9 +383,8 @@ NOTES
   * Tables (users, otps, records) are created by the seed script when it runs,
     and otherwise by the backend on its first boot.
   * The seed script DELETES every row in records and otps, and every user whose
-    phone is not 09999999999 / 09111111111 / 09222222222. It runs by default,
-    between the backend and frontend installs, and still asks you to type SEED.
-    Pass -NoSeed to skip it.
+    phone is not 09999999999 / 09111111111 / 09222222222. It is opt-in: pass
+    -Seed, which asks you to type SEED. A run without it never touches data.
   * OTPs are simulated: they are printed to the backend console and nowhere
     else. They are written to logs/backend.log when run in the background.
 '@
@@ -380,6 +415,8 @@ function Parse-Args {
             '^-{1,2}start$'              { $script:DoStart   = $true }
             '^-{1,2}dev$'                { $script:RunDev    = $true; $script:DoStart = $true }
             '^-{1,2}trust-?local-?auth$'  { $script:TrustLocalAuth = $true }
+            '^-{1,2}re-?configure-?env$'  { $script:ReconfigureEnv = $true }
+            '^-{1,2}open-?code$'          { $script:OpenCode     = $true }
             '^-{1,2}status$'             { $script:Mode      = 'status' }
             '^-{1,2}stop$'               { $script:Mode      = 'stop' }
             '^-{1,2}logs$'               { $script:Mode      = 'logs' }
@@ -387,8 +424,8 @@ function Parse-Args {
             '^-{1,2}db-?name(=.*)?$'     { $script:DbName     = Resolve-Value $a $args_ ([ref]$i) 'DbName' }
             '^-{1,2}db-?user(=.*)?$'     { $script:DbUser     = Resolve-Value $a $args_ ([ref]$i) 'DbUser' }
             '^-{1,2}db-?password(=.*)?$' { $script:DbPassword = Resolve-Value $a $args_ ([ref]$i) 'DbPassword' }
-            '^-{1,2}db-?host(=.*)?$'     { $script:DbHost     = Resolve-Value $a $args_ ([ref]$i) 'DbHost' }
-            '^-{1,2}db-?port(=.*)?$'     { $script:DbPort     = Resolve-Value $a $args_ ([ref]$i) 'DbPort' }
+            '^-{1,2}db-?host(=.*)?$'     { $script:DbHost     = Resolve-Value $a $args_ ([ref]$i) 'DbHost'; $script:DbHostGiven = $true }
+            '^-{1,2}db-?port(=.*)?$'     { $script:DbPort     = Resolve-Value $a $args_ ([ref]$i) 'DbPort'; $script:DbPortGiven = $true }
             '^-{1,2}port(=.*)?$'         { $script:ApiPort    = Resolve-Value $a $args_ ([ref]$i) 'Port'; $script:PortGiven = $true }
             '^-{1,2}frontend-?port(=.*)?$' { $script:FrontendPort = Resolve-Value $a $args_ ([ref]$i) 'FrontendPort' }
             default { Die "Unknown option: $a  (try -Help)" }
@@ -570,8 +607,16 @@ function Get-NodeMajor {
     # cannot become a terminating error under Set-StrictMode /
     # $ErrorActionPreference = 'Stop'.
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return -1 }
+    # The expression MUST stay free of double quotes. Windows PowerShell 5.1 passes
+    # native arguments as a raw command line without escaping quotes, so
+    # `split(".")` reaches node as `split(.)` - a SyntaxError on stderr, which
+    # Invoke-NativeQuiet discards, leaving no output and the -2 sentinel above.
+    # That made setup claim Node was unusable and prompt to install it on a
+    # perfectly healthy machine. A regex literal has no quotes for the argv
+    # parser to consume. PowerShell 7.3+ escapes this correctly by default; 5.1
+    # does not, and setup.bat falls back to 5.1 whenever pwsh is absent.
     $out = @((Invoke-NativeQuiet -Exe node -Rest @(
-        '-p', 'process.versions.node.split(".")[0]'
+        '-p', 'process.versions.node.split(/\./)[0]'
     )).Output)
     # Only the FIRST line is inspected. A wrapper that prints a banner before the
     # version would otherwise make the whole capture an array and .Trim() would
@@ -654,6 +699,255 @@ function Resolve-NodeOnPath {
     return $false
 }
 
+function Get-NpmCandidateDirs {
+    # Well-known npm directories, probed only for npm.cmd. npm ships inside the
+    # Node install, which Resolve-NodeOnPath has normally already put on PATH;
+    # the cases this covers are a global prefix (%APPDATA%\npm) that is not on
+    # PATH, and a Node found in a directory that holds node.exe but no npm.cmd.
+    $candidates = @((Join-PathOrNull $env:APPDATA 'npm'))
+
+    # Get-Command can return node.exe AND node.cmd, and a function or alias
+    # named node has no file path at all. -First 1 keeps $nodeCmd a single
+    # object, and the Source test keeps Split-Path away from an empty argument -
+    # either would be a binding error, and $ErrorActionPreference = 'Stop' would
+    # turn a cosmetic probe into a crash.
+    $nodeCmd = @(Get-Command node -ErrorAction SilentlyContinue) | Select-Object -First 1
+    if ($nodeCmd -and $nodeCmd.Source -and ($nodeCmd.Source -match '[\\/]')) {
+        try   { $nodeDir = Split-Path -Path $nodeCmd.Source -Parent }
+        catch { $nodeDir = '' }
+        if ($nodeDir) { $candidates += $nodeDir }
+    }
+
+    $found = @()
+    foreach ($d in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($d)) { continue }
+        if (Test-Path (Join-Path $d 'npm.cmd')) { $found += $d }
+    }
+    return ,$found
+}
+
+function Resolve-NpmOnPath {
+    # -> [bool] $true when `npm` is callable in THIS process afterwards.
+    #
+    # Only a fallback: npm is checked with Get-Command first, because a broken
+    # PATH entry must not be replaced silently by a different npm.
+    if (Get-Command npm -ErrorAction SilentlyContinue) { return $true }
+    foreach ($dir in (Get-NpmCandidateDirs)) {
+        $env:Path = "$dir;$env:Path"
+        if (Get-Command npm -ErrorAction SilentlyContinue) {
+            Info "Found npm in $dir (added to this session's PATH)."
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-OpenCodeCandidateDirs {
+    # Directories a global `npm install -g opencode-ai` can drop the `opencode`
+    # shim into, probed for opencode.cmd.
+    #
+    # The global npm prefix is the whole reason this function exists. On Windows
+    # the Node installer does NOT put the npm global bin directory on PATH, so a
+    # perfectly successful `npm install --global opencode-ai` can leave the CLI
+    # installed and still not callable. The same class of problem as psql in
+    # C:\Program Files\PostgreSQL\<version>\bin.
+    $candidates = @((Join-PathOrNull $env:APPDATA 'npm')
+                     (Join-PathOrNull $env:LOCALAPPDATA 'npm')
+                     (Join-PathOrNull $env:ProgramFiles 'nodejs'))
+
+    # Reuse the npm probes rather than repeating them: the npm global prefix and
+    # the resolved npm.cmd's own directory are both plausible locations.
+    $candidates += @(Get-NpmCandidateDirs)
+
+    $found = @()
+    foreach ($d in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($d)) { continue }
+        if (Test-Path (Join-Path $d 'opencode.cmd')) { $found += $d }
+    }
+    return ,$found
+}
+
+function Resolve-OpenCodeOnPath {
+    # -> [bool] $true when `opencode` is callable in THIS process afterwards.
+    # Never prompts - safe for the -Status mode, which must stay non-interactive.
+    if (Get-Command opencode -ErrorAction SilentlyContinue) { return $true }
+    foreach ($dir in (Get-OpenCodeCandidateDirs)) {
+        $env:Path = "$dir;$env:Path"
+        if (Get-Command opencode -ErrorAction SilentlyContinue) {
+            Info "Found opencode in $dir (added to this session's PATH)."
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-OpenCodeVersion {
+    # -> [string] the reported version, or 'unknown' if it cannot be read.
+    # First line only, for the same reason as Get-NodeVersionText: a wrapper that
+    # prints a banner would make the capture an array.
+    if (-not (Get-Command opencode -ErrorAction SilentlyContinue)) { return 'unknown' }
+    $out = @((Invoke-NativeQuiet -Exe opencode -Rest @('--version')).Output)
+    $raw = if ($out.Count -gt 0) { "$($out[0])".Trim() } else { '' }
+    if ($raw) { return $raw }
+    return 'unknown'
+}
+
+function Write-OpenCodeConfig {
+    # Creates opencode.json when it is missing. Never overwrites one that exists:
+    # a developer's model and permission choices are theirs, and a setup script has
+    # no business replacing them.
+    $file = Join-Path $Root 'opencode.json'
+    if (Test-Path $file) {
+        Info 'opencode.json already exists - leaving it as it is.'
+        return
+    }
+
+    # A SINGLE-quoted here-string, deliberately. The content contains "$schema"
+    # and a literal "*" key: in a double-quoted here-string PowerShell would try
+    # to expand $schema to nothing and corrupt the JSON.
+    $content = @'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/big-pickle",
+  "default_agent": "build",
+  "permission": {
+    "*": "ask",
+    "read": "allow",
+    "view": "allow",
+    "grep": "allow",
+    "glob": "allow",
+    "edit": "ask",
+    "bash": "ask",
+    "task": "ask",
+    "skill": "ask",
+    "todowrite": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "question": "allow",
+    "external_directory": "ask"
+  }
+}
+'@
+
+    try {
+        # LF, no BOM, trailing newline - byte-for-byte the shape of the .json files
+        # already in the repo. The here-string drops the final newline itself, so
+        # it has to be added back explicitly.
+        [IO.File]::WriteAllText($file, (($content -replace "`r`n", "`n") + "`n"))
+    } catch {
+        Err "Could not write $(Resolve-Relative $file): $($_.Exception.Message)"
+        return
+    }
+    Ok 'Wrote opencode.json (model opencode/big-pickle, default agent build).'
+    Info 'It is listed in .gitignore, so it stays a local file - it will not be committed.'
+}
+
+function Ensure-OpenCode {
+    # Installs the OpenCode CLI when it is missing, or just reports the version
+    # when it is already there. Opt-in via -OpenCode / --opencode.
+    Step 'Checking the OpenCode CLI'
+
+    if (-not $script:NpmReady) {
+        Warn 'Skipping the OpenCode CLI - npm is not available.'
+        Add-SkippedStep 'the OpenCode CLI' 'npm was not found'
+        return
+    }
+
+    [void](Resolve-OpenCodeOnPath)
+    if (Get-Command opencode -ErrorAction SilentlyContinue) {
+        # Already installed: report and stop. Asking "Install it now?" here would
+        # be the exact complaint this feature exists to remove.
+        Ok "opencode $(Get-OpenCodeVersion)"
+    } else {
+        Info 'Install command: npm install --global opencode-ai@latest'
+        if (Confirm 'Install it now?' 'n') {
+            Info 'Running it now; a global npm install can take a minute.'
+            Info 'A UAC prompt may appear - that is expected for a global npm prefix.'
+            & npm install --global opencode-ai@latest
+            $code = $LASTEXITCODE
+
+            # Verification, not the exit code, is authoritative - same rule as
+            # Ensure-Node. The shim lands in the npm global bin directory, which may
+            # not be on PATH yet, so refresh and re-probe before believing either.
+            Update-ProcessPath
+            [void](Resolve-OpenCodeOnPath)
+
+            if (Get-Command opencode -ErrorAction SilentlyContinue) {
+                Ok "opencode $(Get-OpenCodeVersion) installed."
+            } elseif ($code -ne 0) {
+                Err "npm install --global opencode-ai@latest failed (exit code $code / 0x$(Get-CodeHex $code))."
+                Info 'A global install under C:\Program Files\nodejs needs an Administrator prompt;'
+                Info 'otherwise run this in a terminal where `npm prefix -g` is writable.'
+                Add-SkippedStep 'the OpenCode CLI' "npm install failed (exit code $code)"
+            } else {
+                Err 'npm reported success but `opencode` is still not callable.'
+                Info "It was installed into the npm global prefix, which is not on PATH."
+                Info 'Add that directory to PATH and open a new terminal, then re-run.'
+                Add-SkippedStep 'the OpenCode CLI' 'installed but not on PATH'
+            }
+        } else {
+            # Declining the install must not skip the config: -OpenCode was an
+            # explicit request for the OpenCode workspace, and writing a gitignored
+            # local file is not the system change the confirmation guarded.
+            Info 'Skipped the install. Run it later with: npm install --global opencode-ai@latest'
+        }
+    }
+
+    Write-OpenCodeConfig
+}
+
+function Get-PgCandidateDirs {
+    # PostgreSQL installs to <root>\<major>\bin, and its installer deliberately
+    # does NOT add that bin directory to PATH. So on a perfectly normal Windows
+    # machine `Get-Command psql` fails even though psql.exe is sitting in
+    # C:\Program Files\PostgreSQL\16\bin - and without this probe setup would
+    # announce that PostgreSQL is missing and offer to install it over the top of
+    # a working installation. Highest version first, so 17 wins over 16.
+    $roots = @(
+        (Join-PathOrNull $env:ProgramFiles 'PostgreSQL')
+        (Join-PathOrNull ${env:ProgramFiles(x86)} 'PostgreSQL')
+        (Join-PathOrNull (Join-PathOrNull $env:LOCALAPPDATA 'Programs') 'PostgreSQL')
+    )
+
+    $found = @()
+    foreach ($root in $roots) {
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        if (-not (Test-Path $root)) { continue }
+        # -Directory: PowerShell 3.0+ and 5.1 both accept it. Get-ChildItem
+        # cannot throw here - the -ErrorAction silences a denied directory, and
+        # every probe below is guarded by Test-Path.
+        $versions = @(Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue |
+                      Where-Object { $_.Name -match '^\d+$' } |
+                      Sort-Object -Property @{ Expression = { [int]$_.Name } } -Descending)
+        foreach ($v in $versions) {
+            $bin = Join-Path $v.FullName 'bin'
+            if (Test-Path (Join-Path $bin 'psql.exe')) { $found += $bin }
+        }
+    }
+    return ,$found
+}
+
+function Resolve-PsqlOnPath {
+    # -> [bool] $true when `psql` is callable in THIS process afterwards.
+    #
+    # The PostgreSQL counterpart of Resolve-NodeOnPath, for the same reason: the
+    # service is installed, the client is present, and only PATH is stale. Every
+    # caller that decides whether PostgreSQL is available must go through here,
+    # otherwise the install offer fires on machines that already have it.
+    Update-ProcessPath
+    if ((Get-Command psql -ErrorAction SilentlyContinue) -or
+        (Get-Command pg_isready -ErrorAction SilentlyContinue)) { return $true }
+
+    foreach ($dir in (Get-PgCandidateDirs)) {
+        $env:Path = "$dir;$env:Path"
+        if (Get-Command psql -ErrorAction SilentlyContinue) {
+            Info "Found psql in $dir (added to this session's PATH)."
+            return $true
+        }
+    }
+    return $false
+}
+
 function Ensure-Node {
     # Establishes whether Node/npm are usable, and NEVER aborts setup.
     #
@@ -714,6 +1008,7 @@ function Check-Prereqs {
     # above normally makes it resolvable too. This stays a warning: without it,
     # `& npm ci` throws CommandNotFoundException and $ErrorActionPreference='Stop'
     # turns that into an opaque crash instead of the message below.
+    if ($script:NodeReady) { [void](Resolve-NpmOnPath) }
     $script:NpmReady = $script:NodeReady -and [bool](Get-Command npm -ErrorAction SilentlyContinue)
     if ($script:NpmReady) {
         $npmVer = @((Invoke-NativeQuiet -Exe npm -Rest @('-v')).Output)
@@ -725,8 +1020,16 @@ function Check-Prereqs {
     }
 
     # --- PostgreSQL ----------------------------------------------------------
+    # Must run before the test below. psql is routinely installed without its
+    # bin directory on PATH, so probing the well-known install locations first
+    # is what keeps this branch - and the install offer in it - for machines that
+    # really have no PostgreSQL.
+    [void](Resolve-PsqlOnPath)
+
     if (-not (Get-Command psql -ErrorAction SilentlyContinue) -and
         -not (Get-Command pg_isready -ErrorAction SilentlyContinue)) {
+        Info 'Searched PATH (registry + this session) and these directories:'
+        foreach ($dir in (Get-PgCandidateDirs)) { Info "  $dir" }
         if (-not (Offer-Install -Label "PostgreSQL (>= $MinPgMajor)" -Kind Postgres)) {
             Die "PostgreSQL is required and was not installed."
         }
@@ -768,7 +1071,50 @@ function Test-PostgresReady {
     } catch { return $false }
 }
 
+function Start-PostgresService {
+    # -> [string] the service that was started, or '' if none was.
+    #
+    # A machine with PostgreSQL installed and the service stopped is not a
+    # machine that needs PostgreSQL installed, and it is not a reason to ask the
+    # user anything: starting the service is what setup is for. Getting here means
+    # the port probe already failed, so a stopped service is the expected cause.
+    #
+    # pg_isready has to be resolvable for Test-PostgresReady to work, which is
+    # what Resolve-PsqlOnPath guarantees by this point - so if there is no
+    # pg_isready, the probe came from the TCP fallback and this stays silent.
+    if (-not (Get-Command pg_isready -ErrorAction SilentlyContinue)) { return '' }
+    if (-not (Get-Command Get-Service -ErrorAction SilentlyContinue)) { return '' }
+
+    try {
+        $services = @(Get-Service -Name 'postgresql*' -ErrorAction SilentlyContinue)
+    } catch { return '' }
+    if ($services.Count -eq 0) { return '' }
+
+    # Name-sorted descending: postgresql-x64-17 sorts above postgresql-x64-16,
+    # so the newest installed server is the one that gets started.
+    $target = $services | Sort-Object -Property Name -Descending | Select-Object -First 1
+    if (-not $target) { return '' }
+    if ($target.Status -ne 'Stopped') { return '' }
+
+    Info "The '$($target.Name)' service is stopped - starting it."
+    try {
+        # Needs Administrator for a service the current user cannot start; the
+        # catch turns that into the manual hint below instead of a crash.
+        Start-Service -Name $target.Name -ErrorAction Stop
+    } catch {
+        Warn "Could not start '$($target.Name)': $($_.Exception.Message)"
+        return ''
+    }
+    Ok "Started the '$($target.Name)' service."
+    return $target.Name
+}
+
 function Wait-ForPostgres {
+    # One immediate check before waiting anything: a server that is already up
+    # should not cost a second, and a stopped service should be started before
+    # the loop rather than after 30s of it.
+    if (-not (Test-PostgresReady)) { [void](Start-PostgresService) }
+
     Info "Waiting for PostgreSQL on ${DbHost}:$DbPort ..."
     for ($i = 0; $i -lt 30; $i++) {
         if (Test-PostgresReady) {
@@ -777,6 +1123,10 @@ function Wait-ForPostgres {
         }
         Start-Sleep -Seconds 1
     }
+
+    # The service was started (or never existed) and the port is still dead:
+    # something outside setup's reach is wrong, so this is the one case that is
+    # worth asking about.
     Warn "PostgreSQL is not answering on ${DbHost}:$DbPort after 30s."
     Info "Start it with: $(Pg-StartHint)"
     if (-not (Confirm 'Retry the check now?' 'y')) {
@@ -787,6 +1137,26 @@ function Wait-ForPostgres {
 # -----------------------------------------------------------------------------
 # Phase 2 - backend/.env
 # -----------------------------------------------------------------------------
+function Read-DbCoordinatesFromEnv {
+    # Seeds $DbHost/$DbPort from an existing backend/.env so that the
+    # PostgreSQL wait in Check-Prereqs - which runs before Ensure-Env - probes
+    # the host and port the app will actually use. A machine whose .env points at
+    # port 5433 must not be told "PostgreSQL is not answering on localhost:5432"
+    # and be asked to retry. Silent and one-way: an explicit -DbHost / -DbPort
+    # still wins, and nothing here prompts.
+    $envFile = Join-Path $BackendDir '.env'
+    if (-not (Test-Path $envFile)) { return }
+
+    if (-not $script:DbHostGiven) {
+        $v = Get-EnvValue $envFile 'DB_HOST'
+        if ($v) { $script:DbHost = $v }
+    }
+    if (-not $script:DbPortGiven) {
+        $v = Get-EnvValue $envFile 'DB_PORT'
+        if ($v) { $script:DbPort = $v }
+    }
+}
+
 function Get-EnvValue {
     param([string]$File, [string]$Key)
     if (-not (Test-Path $File)) { return '' }
@@ -987,11 +1357,21 @@ function Ensure-Env {
             $script:ApiPort = $envPort
             Info "Using PORT=$ApiPort from the existing backend/.env"
         }
+
         Show-EnvSummary $envFile
-        # Never overwrite silently. A working DB password must not be discarded
-        # just because the file was seen again on a re-run.
-        if (Confirm 'Keep these values, or re-enter them?' 'y') { return }
-        Info 'Re-asking every value in backend/.env ...'
+
+        # Nothing to ask about. An existing .env is a finished decision - a
+        # working DB password in it must not be re-typed on every re-run just to
+        # confirm it, and asking makes a plain `setup.bat` block on input even
+        # when the machine is fully set up and nothing needs changing. Re-entering
+        # is opt-in via -ReconfigureEnv. Matches setup.sh, which never rewrites
+        # an existing file.
+        if (-not $ReconfigureEnv) {
+            Ok 'Reusing backend/.env as it is - pass -ReconfigureEnv to change any value.'
+            return
+        }
+
+        Warn '-ReconfigureEnv: re-asking every value in backend/.env ...'
         Read-EnvSettings
     } else {
         if (-not (Test-Path $example)) { Die 'backend/.env.example is missing; cannot create backend/.env' }
@@ -1040,6 +1420,10 @@ function Invoke-Psql {
 }
 
 function Assert-PsqlAvailable {
+    # Re-probe rather than trusting the Check-Prereqs result: this is the last
+    # gate before the script dies, and it must agree with the check that decided
+    # whether to offer an install. Cheap - the PATH is already warm by now.
+    [void](Resolve-PsqlOnPath)
     if (Get-Command psql -ErrorAction SilentlyContinue) { return }
     Err 'psql is not on PATH, so the database cannot be created automatically.'
     Info 'Add the PostgreSQL bin directory to your PATH (e.g. C:\Program Files\PostgreSQL\16\bin),'
@@ -1634,6 +2018,11 @@ function Show-Status {
     else { Info 'Backend dependencies not installed' }
     if (Test-Path (Join-Path $FrontendDir 'node_modules\react-scripts\package.json')) { Ok 'Frontend dependencies installed' }
     else { Info 'Frontend dependencies not installed' }
+
+    # Resolve-OpenCodeOnPath and Get-OpenCodeVersion never prompt, so reporting
+    # the CLI here keeps -Status non-interactive.
+    if (Resolve-OpenCodeOnPath) { Ok "OpenCode CLI $(Get-OpenCodeVersion)" }
+    else { Info 'OpenCode CLI not installed (setup.bat --opencode installs it)' }
 }
 
 function Show-Logs {
@@ -1724,7 +2113,10 @@ function Show-SetupSummary {
     Write-Host "    Database   ${DbUser}@${DbHost}:${DbPort}/${DbName}"
     Write-Host '    Backend    .env written'
     Write-Host "    Frontend   dependencies $(if ($script:NpmReady) { 'installed' } else { 'NOT installed' })"
-    Write-Host "    Seeded     $(if ($DoSeed) { 'requested' } else { 'no (-NoSeed)' })"
+    Write-Host "    Seeded     $(if ($DoSeed) { 'requested' } else { 'no (-Seed to enable)' })"
+    if ($OpenCode) {
+        Write-Host "    OpenCode   $(if (Get-Command opencode -ErrorAction SilentlyContinue) { Get-OpenCodeVersion } else { 'NOT installed' })"
+    }
     Write-Host ''
     Write-Host '  Run the app' -ForegroundColor White
     Write-Host ''
@@ -1765,6 +2157,9 @@ function Invoke-Main {
     Write-Host '  membership-app setup' -ForegroundColor Green
     Info "Repository root: $Root"
 
+    # Before Check-Prereqs, so the PostgreSQL wait targets the right coordinates.
+    Read-DbCoordinatesFromEnv
+
     Check-Prereqs
     Ensure-Env
     Ensure-Database
@@ -1779,6 +2174,10 @@ function Invoke-Main {
 
     Step 'Installing frontend dependencies'
     Install-FrontendDependencies
+
+    # Opt-in only, and last: it needs npm (known by now) and has nothing to do with
+    # the app, so it must not sit inside the backend -> seed -> frontend chain.
+    if ($OpenCode) { Ensure-OpenCode }
 
     # Setup is complete at this point. Starting the app is opt-in (-Start / -Dev).
     if (-not $DoStart) {

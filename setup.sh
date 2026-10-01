@@ -56,7 +56,36 @@ DO_SEED=0
 DO_START=0
 RUN_DEV=0
 TRUST_LOCAL_AUTH=0
+# Check for / install the OpenCode CLI. Off by default: it is a global npm install
+# that the app itself does not need, so it happens only when asked for.
+OPEN_CODE=0
 MODE="setup"
+
+# Toolchain state, decided once in check_prereqs and read by every step that
+# shells out to node/npm. A missing Node must never abort the run - it only
+# means the npm steps cannot be performed, so those are skipped and recorded
+# here rather than guessed at. Mirrors $script:NodeReady / $script:NpmReady in
+# setup.ps1.
+NODE_READY=1
+NPM_READY=1
+
+# Steps that could not run, for the SETUP INCOMPLETE report at the end. Two
+# parallel plain arrays rather than one string or a map: bash 3.2 (Git Bash on
+# macOS) has no associative arrays, and a delimiter-joined string would break on
+# a reason that itself contains the delimiter. Port of $script:Skipped /
+# Add-SkippedStep in setup.ps1.
+SKIPPED_STEP=()
+SKIPPED_REASON=()
+
+add_skipped_step() {
+  # add_skipped_step <step> <reason>
+  SKIPPED_STEP+=("$1")
+  SKIPPED_REASON+=("$2")
+}
+
+has_skipped_steps() {
+  [ "${#SKIPPED_STEP[@]}" -gt 0 ]
+}
 
 # -----------------------------------------------------------------------------
 # Output helpers
@@ -197,6 +226,11 @@ PORTS
   changing --port also requires editing that file.
 
 OTHER
+  --opencode            Check the OpenCode CLI: print its version when it is
+                          installed, or offer to install opencode-ai@latest
+                          globally via npm when it is not. Also writes
+                          opencode.json if that file does not exist. Nothing is
+                          installed without confirmation.
   --dev                 Run the backend with nodemon in the foreground
                         (implies --start, but the frontend stays stopped)
   --yes, -y             Assume yes for every prompt (non-interactive use)
@@ -230,6 +264,7 @@ parse_args() {
       --start)        DO_START=1 ;;
       --dev)          RUN_DEV=1; DO_START=1 ;;
       --trust-local-auth) TRUST_LOCAL_AUTH=1 ;;
+      --opencode)        OPEN_CODE=1 ;;
       --status)       MODE="status" ;;
       --stop)         MODE="stop" ;;
       --logs)         MODE="logs" ;;
@@ -354,6 +389,73 @@ node_major_version() {
   esac
 }
 
+node_candidate_dirs() {
+  # Well-known Node install directories, in probe order, one per line. Every
+  # entry is checked for an actual `node` binary before it is printed, so a
+  # stale or partial directory cannot put a broken path onto PATH. Bash analogue
+  # of Get-NodeCandidateDirs in setup.ps1.
+  #
+  # The version-manager globs are expanded here rather than left to the caller
+  # because those are the directories most likely to hold a working Node that
+  # PATH does not show - a fresh `nvm install` writes a new version dir and
+  # relies on `nvm use` to export it, which only affects the shell that ran it.
+  local base dir
+  for base in \
+      "${NVM_DIR:-}/versions/node" \
+      "$HOME/.nvm/versions/node" \
+      "$HOME/.fnm/node-versions"; do
+    # Skip empty expansions so the glob below cannot match the literal prefix.
+    [ -n "${base#/}" ] || continue
+    [ -d "$base" ] || continue
+    # Highest version first, so a machine with several installed does not bind
+    # the oldest one that happens to sort first.
+    for dir in $(ls -1d "$base"/*/bin 2>/dev/null | sort -Vr); do
+      [ -x "$dir/node" ] && printf '%s\n' "$dir"
+    done
+  done
+
+  # Fixed locations. LOCALAPPDATA and ProgramFiles only exist on Git Bash, and
+  # the MSYS root is /c there, so these are harmless no-ops elsewhere.
+  for dir in \
+      /usr/local/bin \
+      /opt/homebrew/bin \
+      /usr/local/opt/node/bin \
+      "${LOCALAPPDATA:-/nonexistent}/Programs/nodejs" \
+      "/c/Program Files/nodejs" \
+      "/c/Program Files (x86)/nodejs"; do
+    [ -x "$dir/node" ] && printf '%s\n' "$dir"
+  done
+}
+
+resolve_node_on_path() {
+  # -> 0 when `node` is callable in THIS process afterwards.
+  #
+  # A fresh install appends its directory to the environment of the shell that
+  # will be started next, not to the already-running one, so this process cannot
+  # see it by re-reading PATH alone. Probing the well-known locations is what
+  # makes a working Node visible instead of telling the user to start a new
+  # shell and re-run the whole setup. Port of Resolve-NodeOnPath in setup.ps1.
+  local dir
+  hash -r 2>/dev/null
+  command -v node >/dev/null 2>&1 && return 0
+
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    # Prepend so a candidate actually wins over a stale earlier entry.
+    case ":$PATH:" in
+      *":$dir:"*) ;;
+      *) PATH="$dir:$PATH" ;;
+    esac
+    hash -r 2>/dev/null
+    if command -v node >/dev/null 2>&1; then
+      info "Found Node.js in $dir (added to this session's PATH)."
+      return 0
+    fi
+  done < <(node_candidate_dirs)
+
+  return 1
+}
+
 node_problem() {
   # node_problem <major> -> why Node is unusable right now, or empty when usable.
   # Shared by the pre-install warning and the post-install re-check so the two
@@ -369,8 +471,14 @@ node_problem() {
 }
 
 ensure_node() {
-  # Missing and too-old are the same problem to the user: the toolchain is not
-  # usable yet. Both offer the install; only the wording differs.
+  # Establishes whether Node/npm are usable, and NEVER aborts setup.
+  #
+  # This used to end in `die`, which meant a machine where Node is installed but
+  # invisible to the running shell stopped the whole run before the .env, the
+  # database and the dependencies. Node is a prerequisite for SOME steps, not for
+  # all of them, so a missing toolchain downgrades those steps to "skipped, here's
+  # why" (recorded in SKIPPED_STEP) and the rest of setup carries on. Port of
+  # Ensure-Node in setup.ps1.
   local major ver
   major="$(node_major_version)"
   ver="$(node -v 2>/dev/null || echo 'unknown')"
@@ -383,26 +491,60 @@ ensure_node() {
     return 0
   fi
 
+  # Missing and too-old are the same problem to the user: the toolchain is not
+  # usable yet. Both offer the install; only the wording differs.
   warn "$(node_problem "$major")"
 
-  offer_install "Node.js (>= $MIN_NODE_MAJOR)" "$(node_install_hint)" \
-    || die "Node.js >= $MIN_NODE_MAJOR is required. Fix: $(node_install_hint)"
+  # Best effort: offer the install, but never let the installer's own exit code
+  # decide the outcome. Only the re-verification below is authoritative. This
+  # matters because a package manager can report a non-zero code for a package
+  # that is in fact already present (winget answers 0x8A15002B for exactly that),
+  # and aborting on it would stop setup in front of a working Node.
+  offer_install "Node.js (>= $MIN_NODE_MAJOR)" "$(node_install_hint)" || true
 
-  # Re-verify rather than assume. A fresh install adds a PATH entry, but a Node
-  # that was already installed by other means can sit earlier on PATH and keep
-  # winning - in which case the user still sees the old version and needs to be
-  # told exactly why, instead of re-running into the same dead end.
-  hash -r 2>/dev/null
-  major="$(node_major_version)"
-  if [ "$major" -lt "$MIN_NODE_MAJOR" ]; then
-    err "Node.js is still unusable after installing: $(node_problem "$major")"
-    info "Open a NEW shell first (PATH only refreshes for new processes) and re-run."
-    info "If you manage Node with a version manager:"
-    info "  nvm install $MIN_NODE_MAJOR && nvm use $MIN_NODE_MAJOR   /   fnm use $MIN_NODE_MAJOR"
-    info "Otherwise uninstall any old Node install and re-run setup."
-    die "Node.js >= $MIN_NODE_MAJOR is required."
+  # Re-verify rather than assume. resolve_node_on_path also re-reads PATH and
+  # probes the well-known install directories, so a Node that IS installed but
+  # not yet on this shell's PATH is found here instead of being reported as
+  # missing.
+  if ! resolve_node_on_path; then
+    NODE_READY=0
+    err "Node.js is still not usable after attempting to install it."
+    # Spelled out as a command substitution rather than a pipeline into a while
+    # loop: the loop would run in a subshell, which is fine for printing but
+    # obscures that nothing here is allowed to affect the caller's state.
+    local searched
+    searched="$(node_candidate_dirs)"
+    if [ -n "$searched" ]; then
+      info "Searched PATH and these directories:"
+      while IFS= read -r dir; do
+        [ -n "$dir" ] && info "  $dir"
+      done <<EOF
+$searched
+EOF
+    else
+      info "No known Node install directory was found on this machine."
+    fi
+    info "Install it with: $(node_install_hint)"
+    info "Continuing. The steps that need npm will be skipped - re-run setup"
+    info "after Node is installed to complete them."
+    return 0
   fi
-  ok "Node.js $(node -v) is now available."
+
+  major="$(node_major_version)"
+  ver="$(node -v 2>/dev/null || echo 'unknown')"
+
+  if [ "$major" -ge "$MIN_NODE_MAJOR" ]; then
+    ok "Node.js $ver  (need >= $MIN_NODE_MAJOR)"
+    return 0
+  fi
+
+  # Usable, but too old for this project. Proceeding is the user's call, not
+  # ours - warn clearly and let setup continue. Port of the equivalent branch in
+  # Ensure-Node (setup.ps1:691).
+  NODE_READY=1
+  warn "Node.js $ver is below the required $MIN_NODE_MAJOR. Upgrade it:"
+  info "  $(node_install_hint)"
+  info "Continuing anyway - npm may fail on this version."
 }
 
 # -----------------------------------------------------------------------------
@@ -415,10 +557,17 @@ check_prereqs() {
   ensure_node
 
   # --- npm -------------------------------------------------------------------
-  if command -v npm >/dev/null 2>&1; then
+  # npm ships in the same directory as node, so resolving Node above normally
+  # makes it resolvable too. This stays a warning: without it, every later `npm`
+  # call dies with a bare "command not found" instead of the message below, and
+  # `die` here would throw away the .env and the database work.
+  if [ "$NODE_READY" = "1" ] && command -v npm >/dev/null 2>&1; then
     ok "npm v$(npm -v)"
   else
-    die "npm is missing. It ships with Node.js - reinstall Node, or see: $(node_install_hint)"
+    NPM_READY=0
+    warn "npm is not available. It ships with Node.js."
+    info "Once Node is installed: $(node_install_hint)"
+    add_skipped_step "npm-dependent steps" "npm was not found"
   fi
 
   # --- PostgreSQL ------------------------------------------------------------
@@ -436,6 +585,9 @@ check_prereqs() {
     if [ -z "$pg_major" ]; then
       warn "Could not parse the PostgreSQL version from '$pg_raw'. Continuing."
     elif [ "$pg_major" -lt "$MIN_PG_MAJOR" ]; then
+      # Still fatal, unlike Node. The database phases immediately afterwards
+      # speak to this exact client, so an old one fails with protocol errors
+      # rather than a clean skip. Matches setup.ps1:743.
       die "PostgreSQL '$pg_raw' is older than the required $MIN_PG_MAJOR. Install a newer server."
     else
       ok "PostgreSQL client $pg_raw  (need >= $MIN_PG_MAJOR)"
@@ -673,7 +825,14 @@ ensure_database() {
 # -----------------------------------------------------------------------------
 install_deps() {
   # install_deps <dir> <label> <sentinel-package>
+  # -> 0 when the dependencies are in place afterwards, 1 when they are not.
   local dir="$1" label="$2" sentinel="$3"
+
+  if [ "$NPM_READY" != "1" ]; then
+    warn "Skipping the $label dependencies - npm is not available."
+    add_skipped_step "$label dependencies (npm ci)" "npm was not found"
+    return 1
+  fi
 
   if [ -f "$dir/node_modules/$sentinel/package.json" ]; then
     ok "$label dependencies already installed (found $sentinel)"
@@ -698,13 +857,145 @@ install_deps() {
     info "  macOS   xcode-select --install"
     info "  Windows npm install --global windows-build-tools"
   fi
-  die "Cannot continue without $label dependencies."
+  # Recorded, not fatal: the database and .env are already prepared, so a user
+  # who can fix npm (or a proxy) should not have to redo that work. Matches the
+  # Add-SkippedStep call in Install-Deps (setup.ps1:1168).
+  add_skipped_step "$label dependencies" "npm install failed"
+  return 1
 }
 
 install_dependencies() {
   step "Installing dependencies"
-  install_deps "$BACKEND_DIR"  "backend"  "express"
-  install_deps "$FRONTEND_DIR" "frontend" "react-scripts"
+  # Both are attempted even when the first fails, so one broken lockfile does
+  # not hide the state of the other.
+  install_deps "$BACKEND_DIR"  "backend"  "express"  || true
+  install_deps "$FRONTEND_DIR" "frontend" "react-scripts" || true
+}
+
+# -----------------------------------------------------------------------------
+# Phase 4b - OpenCode CLI (opt-in)
+# -----------------------------------------------------------------------------
+opencode_install_hint() {
+  echo "npm install --global opencode-ai@latest"
+}
+
+resolve_opencode_on_path() {
+  # -> 0 when `opencode` is callable in this shell afterwards.
+  # Never prompts, so --status stays non-interactive.
+  command -v opencode >/dev/null 2>&1 && return 0
+
+  # A global npm install can land in a bin directory that is not on PATH. On unix
+  # that is normally already covered, but the probe makes the check independent of
+  # the user's shell profile. Port of Resolve-OpenCodeOnPath (setup.ps1).
+  local prefix bin
+  prefix="$(npm prefix -g 2>/dev/null)" || prefix=""
+  for bin in "$prefix/bin" "$prefix"; do
+    [ -n "$bin" ] || continue
+    [ -x "$bin/opencode" ] || continue
+    PATH="$bin:$PATH"
+    export PATH
+    hash -r 2>/dev/null || true
+    info "Found opencode in $bin (added to this session's PATH)."
+    return 0
+  done
+  return 1
+}
+
+opencode_version() {
+  command -v opencode >/dev/null 2>&1 || { echo "unknown"; return 0; }
+  # First line only, and stderr discarded: a wrapper that prints a banner would
+  # otherwise leak into the version line.
+  local v
+  v="$(opencode --version 2>/dev/null | head -n 1)"
+  [ -n "$v" ] && echo "$v" || echo "unknown"
+}
+
+write_opencode_config() {
+  # Creates opencode.json when it is missing. Never overwrites one that exists: a
+  # developer's model and permission choices are theirs.
+  local file="$ROOT/opencode.json"
+  if [ -f "$file" ]; then
+    info "opencode.json already exists - leaving it as it is."
+    return 0
+  fi
+
+  # Quoted heredoc delimiter, deliberately: the content contains "$schema" and a
+  # literal "*" key, both of which an unquoted heredoc would try to expand.
+  if cat > "$file" <<'JSON'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/big-pickle",
+  "default_agent": "build",
+  "permission": {
+    "*": "ask",
+    "read": "allow",
+    "view": "allow",
+    "grep": "allow",
+    "glob": "allow",
+    "edit": "ask",
+    "bash": "ask",
+    "task": "ask",
+    "skill": "ask",
+    "todowrite": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "question": "allow",
+    "external_directory": "ask"
+  }
+}
+JSON
+  then
+    ok "Wrote opencode.json (model opencode/big-pickle, default agent build)."
+    info "It is listed in .gitignore, so it stays a local file - it will not be committed."
+  else
+    err "Could not write opencode.json."
+  fi
+}
+
+ensure_opencode() {
+  step "Checking the OpenCode CLI"
+
+  if [ "$NPM_READY" != "1" ]; then
+    warn "Skipping the OpenCode CLI - npm is not available."
+    add_skipped_step "the OpenCode CLI" "npm was not found"
+    return 0
+  fi
+
+  if resolve_opencode_on_path; then
+    # Already installed: report and stop. Asking "Install it now?" here would be
+    # the exact complaint this feature exists to remove.
+    ok "opencode $(opencode_version)"
+  else
+    info "Install command: $(opencode_install_hint)"
+    if confirm "Install it now?" "n"; then
+      info "Running it now; a global npm install can take a minute."
+      if npm install --global opencode-ai@latest; then
+        # Verification, not the exit code, is authoritative - same rule as
+        # ensure_node. The bin directory may not be on PATH yet.
+        resolve_opencode_on_path >/dev/null 2>&1 || true
+        if command -v opencode >/dev/null 2>&1; then
+          ok "opencode $(opencode_version) installed."
+        else
+          err "npm reported success but \`opencode\` is still not callable."
+          info "It was installed into the npm global prefix, which is not on PATH."
+          info "Add that directory to PATH and open a new terminal, then re-run."
+          add_skipped_step "the OpenCode CLI" "installed but not on PATH"
+        fi
+      else
+        err "npm install --global opencode-ai@latest failed."
+        info "A global install may need elevated permissions on your npm prefix:"
+        info "  npm prefix -g"
+        add_skipped_step "the OpenCode CLI" "npm install failed"
+      fi
+    else
+      # Declining the install must not skip the config: --opencode was an explicit
+      # request for the OpenCode workspace, and writing a gitignored local file is
+      # not the system change the confirmation above was guarding against.
+      info "Skipped the install. Run it later with: $(opencode_install_hint)"
+    fi
+  fi
+
+  write_opencode_config
 }
 
 # -----------------------------------------------------------------------------
@@ -712,6 +1003,20 @@ install_dependencies() {
 # -----------------------------------------------------------------------------
 run_seed() {
   step "Seeding demo data"
+
+  if [ "$NPM_READY" != "1" ]; then
+    warn "Skipping the seed - npm is not available."
+    add_skipped_step "seed data" "npm was not found"
+    return 1
+  fi
+  # The seed requires bcrypt, which lives in the backend's node_modules, so it
+  # cannot run before install_deps succeeded. Port of Invoke-Seed (setup.ps1:1192).
+  if [ ! -f "$BACKEND_DIR/node_modules/express/package.json" ]; then
+    warn "Skipping the seed - the backend dependencies are not installed yet."
+    add_skipped_step "seed data" "backend dependencies missing"
+    return 1
+  fi
+
   warn "The seed script is DESTRUCTIVE. It will:"
   info "  * DELETE every row from the 'records' table"
   info "  * DELETE every row from the 'otps' table"
@@ -725,9 +1030,12 @@ run_seed() {
 
   if ( cd "$BACKEND_DIR" && npm run seed ); then
     ok "Seed complete."
-  else
-    die "Seeding failed."
+    return 0
   fi
+
+  err "Seeding failed."
+  add_skipped_step "seed data" "npm run seed exited non-zero"
+  return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -770,6 +1078,15 @@ describe_pids() {
 }
 
 assert_ports_free() {
+  # port_in_use shells out to node, so without a working Node it cannot tell a
+  # free port from an occupied one - every probe would fail and report "free".
+  # That is worse than not checking: the script would then try to start servers
+  # onto ports someone else owns.
+  if [ "$NODE_READY" != "1" ]; then
+    warn "Skipping the port check - it needs Node.js, which is not available."
+    return 0
+  fi
+
   step "Checking ports"
   local busy=0
   if port_in_use "$API_PORT"; then
@@ -975,6 +1292,12 @@ start_one() {
 }
 
 do_start() {
+  if [ "$NPM_READY" != "1" ]; then
+    warn "Skipping the start: npm is not available, so the app cannot be launched."
+    add_skipped_step "start the backend and frontend" "npm was not found"
+    return 1
+  fi
+
   step "Starting services"
   mkdir -p "$LOG_DIR"
 
@@ -1034,6 +1357,12 @@ do_start() {
 }
 
 do_start_foreground_backend() {
+  if [ "$NPM_READY" != "1" ]; then
+    warn "Cannot start the backend: npm is not available."
+    add_skipped_step "run the backend in the foreground" "npm was not found"
+    return 1
+  fi
+
   step "Starting the backend with nodemon (foreground)"
   info "Press Ctrl+C to stop."
   ( cd "$BACKEND_DIR" && exec npm run dev )
@@ -1081,6 +1410,14 @@ do_status() {
     ok "Frontend dependencies installed"
   else
     info "Frontend dependencies not installed"
+  fi
+
+  # resolve_opencode_on_path / opencode_version never prompt, so reporting the
+  # CLI here keeps --status non-interactive.
+  if resolve_opencode_on_path; then
+    ok "OpenCode CLI $(opencode_version)"
+  else
+    info "OpenCode CLI not installed (./setup.sh --opencode installs it)"
   fi
 }
 
@@ -1145,19 +1482,57 @@ $(printf '%s  Where to look next%s' "$C_BOLD" "$C_RESET")
 SUMMARY
 }
 
+print_skipped_report() {
+  has_skipped_steps || return 0
+
+  local i
+  printf '\n%s%s  SETUP INCOMPLETE%s\n' "$C_YELLOW" "$C_BOLD" "$C_RESET"
+  printf '%s  Some steps could not run:%s\n' "$C_YELLOW" "$C_RESET"
+  for i in "${!SKIPPED_STEP[@]}"; do
+    printf '%s    - %s  (%s)%s\n' \
+      "$C_YELLOW" "${SKIPPED_STEP[$i]}" "${SKIPPED_REASON[$i]}" "$C_RESET"
+  done
+  printf '\n'
+  printf '%s  Fix the cause above, then re-run setup - it resumes where it left%s\n' "$C_YELLOW" "$C_RESET"
+  printf '%s  off and re-uses backend/.env as it is.%s\n\n' "$C_YELLOW" "$C_RESET"
+}
+
 print_setup_summary() {
-  local seeded="no"
+  local seeded="no" deps="installed" banner opencode_state=""
   [ "$DO_SEED" = "1" ] && seeded="yes"
+  [ "$NPM_READY" = "1" ] || deps="NOT installed"
+  if [ "$OPEN_CODE" = "1" ]; then
+    if command -v opencode >/dev/null 2>&1; then
+      opencode_state="$(opencode_version)"
+    else
+      opencode_state="NOT installed"
+    fi
+  fi
+
+  print_skipped_report
+
+  # Built here rather than inline in the heredoc so that --opencode not being
+  # passed leaves no stray blank line in the summary.
+  local opencode_line=""
+  [ "$OPEN_CODE" = "1" ] && opencode_line="$(printf '    OpenCode   %s' "$opencode_state")"
+
+  # Green only when nothing was skipped, so the banner cannot claim success on
+  # a run that left work undone.
+  if has_skipped_steps; then
+    banner="$C_YELLOW$C_BOLD  Setup finished with skipped steps - nothing was started$C_RESET"
+  else
+    banner="$C_GREEN$C_BOLD  Setup complete - nothing was started$C_RESET"
+  fi
 
   cat <<SUMMARY
 
-$(printf '%s%s  Setup complete - nothing was started%s' "$C_GREEN" "$C_BOLD" "$C_RESET")
+$banner
 
     Database   ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}
-    Backend    .env written, dependencies installed
-    Frontend   dependencies installed
+    Backend    .env written
+    Frontend   dependencies ${deps}
     Seeded     ${seeded}
-
+${opencode_line}
 $(printf '%s  Run the app%s' "$C_BOLD" "$C_RESET")
 
     Backend    cd ${BACKEND_DIR#$ROOT/} && npm run dev
@@ -1202,6 +1577,10 @@ main() {
   ensure_database
   install_dependencies
 
+  # Opt-in only, and last: it needs npm (known by now) and has nothing to do with
+  # the app, so it must not sit inside the backend -> seed -> frontend chain.
+  [ "$OPEN_CODE" = "1" ] && ensure_opencode
+
   if [ "$DO_SEED" = "1" ]; then
     run_seed
   fi
@@ -1215,12 +1594,20 @@ main() {
   assert_ports_free
 
   if [ "$RUN_DEV" = "1" ]; then
-    do_start_foreground_backend
+    do_start_foreground_backend || print_skipped_report
     exit 0
   fi
 
-  do_start
-  print_summary
+  # do_start returning non-zero means it never ran (npm missing), not that the
+  # servers came up and then died - a real start failure still dies inside it.
+  # Printing the "app is up" banner in that case would be a lie, so report the
+  # skips instead. Exit code stays 0 so a re-run is the obvious next step.
+  if do_start; then
+    print_summary
+  else
+    print_skipped_report
+    printf '\n%s%s  Nothing was started%s\n' "$C_YELLOW" "$C_BOLD" "$C_RESET"
+  fi
 }
 
 main "$@"
