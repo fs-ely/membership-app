@@ -1,6 +1,32 @@
 # JasaSane Corp
 
-A full-stack membership registration system with two-factor authentication (2FA). Users register with a phone number and password, log in via OTP verification, and gain the ability to register and manage member records. Any registered user can add members with their personal details, location, and profile image.
+A membership registration app with two-factor login. People register with a phone
+number and a password, log in with a one-time code, and can then add and manage
+member records.
+
+## Run it
+
+One command prepares everything (database, configuration, dependencies):
+
+```bash
+setup.bat --db-password=your_password   # Windows Command Prompt
+./setup.sh --db-password=your_password # macOS or Linux
+```
+
+It asks you nothing that is already set up, and it does **not** start the app
+itself. To do that, open two terminals:
+
+```bash
+cd backend && npm run dev    # the API, on http://localhost:5000
+cd frontend && npm start     # the website, on http://localhost:3000
+```
+
+Then visit **http://localhost:3000** and register an account.
+
+> There is no real SMS service here. When you log in, the one-time code is
+> printed in the **backend** terminal, not sent to your phone.
+
+If any of that did not work as expected, [Setup](#setup) explains every step.
 
 Built with:
 
@@ -113,30 +139,41 @@ database, generate `backend/.env`, install dependencies and (on request) seed th
 demo data - then stop. They do **not** start the app; you run it yourself
 afterwards (or pass `--start`).
 
-| Platform | Command |
-| -------- | ------- |
-| **Windows Command Prompt** | `setup.bat` |
-| Windows (PowerShell) | `pwsh -File setup.ps1` |
-| Windows (old PowerShell 5.1) | `powershell -ExecutionPolicy Bypass -File setup.ps1` |
-| macOS, Ubuntu/Debian, other Linux | `./setup.sh` |
-| WSL or Git Bash on Windows | `./setup.sh` |
+Use `setup.bat` on Windows, or `./setup.sh` on macOS and Linux. It works out the
+rest itself:
 
-On Command Prompt, `setup.bat` is a thin launcher: it picks an engine
-(PowerShell 7, then Windows PowerShell 5.1, then Git Bash) and hands your
-arguments straight to `setup.ps1` or `setup.sh`. It contains no setup logic of
-its own. On macOS and Linux, just run `./setup.sh` directly.
+```bash
+setup.bat                 # Windows
+./setup.sh                # macOS / Linux
+./setup.sh --status       # check what is currently running
+setup.bat --help          # every available option
+```
+
+On Windows, `setup.bat` picks the best available engine for you — PowerShell 7,
+then Windows PowerShell 5.1, then Git Bash — and passes your options straight
+through. You never need to choose.
+
+<details>
+<summary>Running the scripts directly instead</summary>
+
+```powershell
+pwsh -File setup.ps1                                      # PowerShell 7
+powershell -ExecutionPolicy Bypass -File setup.ps1        # Windows PowerShell 5.1
+```
+
+```bash
+./setup.sh            # WSL and Git Bash work the same way
+```
+
+</details>
 
 ```powershell
 :: Command Prompt or PowerShell - the same command works in both
 setup.bat --db-password=your_password
 ```
 
-Because `setup.bat` forwards your arguments verbatim, **every switch in the
-table below works through it unchanged**, and `setup.bat --help` shows the same
-help. On a fresh Windows machine it will pick `setup.ps1`, so
-[the PowerShell behaviour is what you get](#windows-vs-macoslinux).
-
-Make the shell script executable once after cloning:
+Every option in the table below works the same on both. On macOS and Linux, make
+the script executable once after cloning:
 
 ```bash
 chmod +x setup.sh
@@ -154,6 +191,8 @@ chmod +x setup.sh
 5. `npm ci` in `backend`
 6. Seed the demo data — **opt-in via `--seed`, destructive, asks you to type `SEED`**
 7. `npm ci` in `frontend`
+8. Check the OpenCode CLI — **only with `--opencode`**: reports the installed
+   version, or offers to install it. Starts nothing.
 
 **Setup asks you nothing when everything is already in place.** A re-run on a
 fully prepared machine prints status and moves on: no install prompts, no `.env`
@@ -178,8 +217,8 @@ POSIX style and its own, so commands are portable across every platform:
 
 #### Windows vs macOS/Linux
 
-`setup.ps1` and `setup.sh` still differ in how an existing `backend/.env` is
-handled. The differences below are real:
+If you use both platforms, or move between them, these are the real behavioural
+differences:
 
 | | `setup.bat` / `setup.ps1` (Windows) | `setup.sh` (macOS, Linux, WSL) |
 | --- | --- | --- |
@@ -189,7 +228,6 @@ handled. The differences below are real:
 | `backend/.env` | Prompts for **every** key when creating it | Prompts only for `DB_USER` and `DB_PASSWORD` |
 | `JWT_SECRET` | Prompted; type `random` to generate one, or keep the default and get a warning | Always generated automatically, no prompt |
 | Existing `backend/.env` | Shown (secrets masked) and **reused as-is**; `--reconfigure-env` re-asks every key and rewrites it | Reused as-is and never rewritten |
-| Node.js unusable | Records skipped steps and continues | Stops the run |
 | PostgreSQL service stopped | Started automatically, then re-probed | Not applicable (no service) |
 
 Neither script ever rewrites an existing `backend/.env` unless you explicitly
@@ -219,6 +257,23 @@ ask it to.
 | `--yes` | Assume yes for every prompt, for non-interactive runs |
 | `--help` | Show the built-in help |
 
+#### Option syntax — which engine you get
+
+`setup.bat` forwards your arguments verbatim to whichever engine it finds, and the
+two engines accept slightly different spellings. **Use `--flag=value`** — it is
+the one form both accept, on every platform:
+
+| | `setup.ps1` (via `pwsh` or `powershell`) | `setup.sh` (Git Bash fallback) |
+| --- | --- | --- |
+| Hyphens | `-DbName` or `--db-name` | `--db-name` only |
+| Value | `-DbName=x` or `-DbName x` | `--db-name=x` only |
+| Case | insensitive | must match exactly |
+
+Two switches exist **only** in `setup.ps1`: `--no-seed` and `--reconfigure-env`.
+On the Git Bash fallback they fail with `Unknown option` — run `setup.ps1`
+directly (or `pwsh -File setup.ps1`) to use them. Every other option in the table
+above works through `setup.bat` unchanged.
+
 Examples:
 
 ```bash
@@ -231,18 +286,28 @@ Examples:
 # Windows: first-time setup, same thing through the launcher
 setup.bat --db-password=your_password
 
-# Re-run later: nothing is already in place, so setup asks nothing
+# Re-run later: everything is already in place, so setup asks nothing
 setup.bat
 
 # Load the demo data (destroys existing data, confirms with SEED)
 setup.bat --seed
 
 # Change the database credentials after the first run
+# (--reconfigure-env is PowerShell-only - see "Option syntax" above)
 setup.bat --reconfigure-env
+
+# Also check the OpenCode CLI and write opencode.json if it is missing
+setup.bat --opencode
+
+# Check what is running, without changing anything
+setup.bat --status
 
 # Fully unattended (CI, or a machine where you already know the password)
 setup.bat --yes --db-user=postgres --db-password=postgres
 ```
+
+Every example above uses the `--flag=value` form, which is the spelling both
+`setup.ps1` and `setup.sh` accept.
 
 #### How `backend/.env` is configured
 
@@ -334,10 +399,10 @@ What the script does **not** do:
 
 #### If Node or npm is missing
 
-`setup.ps1` (and therefore `setup.bat`) **does not abort** when it cannot find or
-use Node. Every step that needs `npm` — the two installs, the seed, `--start` —
-is recorded as skipped, everything else still runs, and the run ends with a
-`SETUP INCOMPLETE` block listing each skipped step and the reason:
+**Neither script aborts** when it cannot find or use Node. Every step that needs
+`npm` — the two installs, the seed, `--start` — is recorded as skipped, everything
+else still runs, and the run ends with a `SETUP INCOMPLETE` block listing each
+skipped step and the reason:
 
 ```
   SETUP INCOMPLETE
@@ -346,38 +411,36 @@ is recorded as skipped, everything else still runs, and the run ends with a
 ```
 
 Fix the cause and re-run: it resumes where it left off and re-uses the existing
-`backend/.env`. `setup.sh` has no equivalent recovery — it stops on a missing or
-too-old Node.
+`backend/.env`. This recovery is identical on `setup.bat` (via `setup.ps1`) and on
+`./setup.sh`.
 
 An old-but-working Node is handled differently: if `node` runs but is below
 version 18, setup warns that `npm` may fail on it and continues anyway, so the
 npm steps are still attempted rather than skipped.
 
-Notes on the Windows installer path, should you hit it:
+#### How setup finds things that are already installed
 
-- Node.js and PostgreSQL are installed with **winget** (or **choco**), passing
-  `--accept-package-agreements --accept-source-agreements` so the install cannot
-  stall on an interactive prompt that looks like a hang.
-- winget draws its own progress bar, which only renders because the installer is
-  launched attached to your console. A UAC prompt is expected for a machine-wide
-  install.
-- "Already installed" is treated as success, not failure — including
-  winget's `0x8A15002B`, and the `3010`/`1641` "succeeded, reboot pending" codes.
-- With no `winget` and no `choco`, setup prints a download URL instead of trying
-  to run one as a command.
-- If Node is installed but still not found, setup re-reads `PATH` from the
-  registry (without discarding your session-only entries) and then probes the
-  usual install directories — `%ProgramFiles%\nodejs`,
-  `%LOCALAPPDATA%\Programs\nodejs`, the nvm folders, and so on.
-- `psql` gets the same treatment, and it matters more often: PostgreSQL installs
-  to `%ProgramFiles%\PostgreSQL\<version>\bin` and the installer does **not** add
-  that directory to `PATH`. Setup probes those directories (newest version first)
-  before concluding PostgreSQL is missing, so an installed-but-off-`PATH`
-  PostgreSQL is used rather than offered for installation again.
-- If PostgreSQL is installed but its Windows service is stopped, setup starts it
-  (`postgresql-*`, newest first) and re-probes instead of asking what to do. Only
-  if that fails — usually an Administrator rights problem — does it print the
-  manual `net start` command.
+Setup never offers to install software you already have. On Windows that mostly
+comes down to one thing: installers often do **not** add their own folder to your
+`PATH`, so a freshly installed program can be invisible until you open a new
+terminal. Setup handles that for you —
+
+- **Node.js** is looked for on `PATH` first, then in the usual install folders
+  (`%ProgramFiles%\nodejs`, the nvm folders, and so on).
+- **`psql`** matters more often: PostgreSQL installs to
+  `%ProgramFiles%\PostgreSQL\<version>\bin`, which its installer deliberately
+  leaves off `PATH`. Setup probes those folders, newest version first.
+- **A stopped PostgreSQL service** is started for you (`postgresql-*`, newest
+  first) and re-checked. If that needs Administrator rights and fails, setup
+  prints the `net start` command to run yourself.
+- **Installs go through winget or choco** where available, and a UAC prompt is
+  normal. "Already installed" counts as success, and so does "succeeded, reboot
+  pending". With neither tool present, setup prints a download link instead of
+  guessing.
+
+If you would rather set the password at the prompt than on the command line,
+that is always the safest option — a password containing `&`, `^`, `|`, `<` or
+`>` can be mangled by Command Prompt before it reaches the script.
 
 Runtime files (`backend.log`, `frontend.log`, `*.pid`) are written to `logs/`,
 which is gitignored. They only appear if you start the app with `--start`.
@@ -390,7 +453,8 @@ which is gitignored. They only appear if you start the app with `--start`.
 
 ### Manual Setup
 
-The original step-by-step instructions follow, unchanged.
+Use this only if you want to do everything by hand — the automated script above
+is faster and gets the details right for you. Either way, the result is the same.
 
 #### Step 0: Check Prerequisites
 
@@ -436,7 +500,10 @@ Now open `backend/.env` and update it to match your local setup:
 | `JWT_SECRET`         | Secret used to sign authentication tokens (change this!) | `some_long_random_secret_string` |
 | `OTP_EXPIRY_MINUTES` | How long a generated OTP remains valid (in minutes)      | `5`                              |
 
-You **must** set `DB_USER` and `DB_PASSWORD` to the credentials of your local PostgreSQL, and change `JWT_SECRET` to your own secret string.
+You **must** set `DB_USER` and `DB_PASSWORD` to the credentials of your local
+PostgreSQL, and change `JWT_SECRET` to your own secret string. The automated
+setup script handles all of this for you — see
+[How `backend/.env` is configured](#how-backendenv-is-configured).
 
 #### Step 3: Install and Run the Backend
 
@@ -487,61 +554,21 @@ With both terminals running, open `http://localhost:3000` in your browser.
 
 ## Installing GNU Make
 
-`make` drives the OpenCode workflow and the other convenience targets in the
-`Makefile`. GNU Make is preinstalled on macOS and most Linux distributions; on
-Windows it is not.
-
-Check whether you already have it:
+You only need this for the optional [`make` shortcuts](#opencode), such as
+`make opencode`. Check whether you already have it:
 
 ```bash
 make --version   # "GNU Make 4.x" or similar
 ```
 
-### Linux
+It comes preinstalled on macOS and most Linux distributions, so there is usually
+nothing to do. **On Windows it is not included.**
 
-```bash
-# Debian / Ubuntu
-sudo apt-get update && sudo apt-get install -y make
+<details>
+<summary>How to install it</summary>
 
-# Fedora / RHEL / CentOS
-sudo dnf install -y make
-
-# Arch (make ships in the base-devel group)
-sudo pacman -S make
-
-# Alpine
-sudo apk add make
-
-# openSUSE
-sudo zypper install -y make
-```
-
-### macOS
-
-`make` comes with the Xcode Command Line Tools, which macOS offers to install
-on first use. To install it directly:
-
-```bash
-xcode-select --install
-```
-
-A dialog appears; click **Install**. If it reports the tools are already
-installed, you are done:
-
-```bash
-make --version
-```
-
-Optionally, for GNU Make 4.x instead of Apple's 3.81:
-
-```bash
-brew install make    # installs as `gmake`
-```
-
-### Windows
-
-Windows has no built-in `make`. **WSL is the recommended route**, because the
-`Makefile` recipes are POSIX shell and run unchanged inside WSL:
+**Windows — WSL is the recommended route**, because the `Makefile` uses shell
+commands that run unchanged inside WSL:
 
 ```powershell
 # One-time: install WSL with Ubuntu (restart if prompted)
@@ -554,29 +581,40 @@ sudo apt-get update && sudo apt-get install -y make
 Clone or open the project inside the WSL filesystem (`\\wsl$`) and run
 `make opencode` from there.
 
-Native Windows alternatives, if you would rather not use WSL:
+**Windows — without WSL:**
 
 ```powershell
-# winget (package id is ezwinports.make; the old GnuWin32.Make was removed)
-winget install -e --id ezwinports.make
-
-# Chocolatey
-choco install make -y
-
-# Scoop
-scoop install make
+winget install -e --id ezwinports.make   # or: choco install make -y / scoop install make
 ```
 
-> **Caveat:** the `Makefile` has no `SHELL` override, so Windows-native `make`
-> runs recipes through `cmd.exe`, where the POSIX syntax in the `opencode`
-> target will fail. If you hit this, use WSL, or set a POSIX shell for make:
+> Windows-native `make` runs commands through `cmd.exe`, which chokes on the
+> `Makefile`'s shell syntax. If a target fails, use WSL, or point `make` at a
+> POSIX shell:
 >
 > ```powershell
 > make SHELL="C:\Program Files\Git\bin\bash.exe" opencode
 > ```
 
-Open a **new terminal** after any Windows install so the updated `PATH` is
-picked up.
+**Linux:**
+
+```bash
+sudo apt-get install -y make   # Debian / Ubuntu
+sudo dnf install -y make       # Fedora / RHEL / CentOS
+sudo pacman -S make            # Arch (base-devel group)
+sudo apk add make              # Alpine
+sudo zypper install -y make    # openSUSE
+```
+
+**macOS:**
+
+```bash
+xcode-select --install    # click Install in the dialog that appears
+brew install make         # optional, for GNU Make 4.x (installs as `gmake`)
+```
+
+Open a **new terminal** after any Windows install so the change takes effect.
+
+</details>
 
 ## OpenCode
 
@@ -664,7 +702,7 @@ it stays local): `agents/` for custom subagents, `skills/` for project skills,
 | `SETUP INCOMPLETE` printed after `setup.bat`   | Node.js or npm could not be used, so those steps were skipped and everything else still ran. Fix Node, then re-run — it resumes and re-uses `backend/.env`. See [If Node or npm is missing](#if-node-or-npm-is-missing). |
 | Node.js installed but setup says it is still not usable | A stale `PATH`, or a version manager / IDE shim shadowing it. Open a **new** terminal and re-run; setup already re-reads `PATH` from the registry and probes the usual install directories. With `nvm`, run `nvm use 22` (or 24) in the same terminal first. |
 | Setup offers to install PostgreSQL that is already installed | The installer never adds `C:\Program Files\PostgreSQL\<version>\bin` to `PATH`. Setup probes those directories automatically; if it still offers an install, your install is somewhere else — add its `bin` to `PATH` and re-run. |
-| `PostgreSQL is not answering on localhost:5432 after 30s` | The service did not start automatically (needs an Administrator prompt) or is not on port 5432. Run `net start postgresql-x64-16` from an Administrator prompt, or set `DB_PORT` in `backend/.env` / pass `--db-port`. |
+| `PostgreSQL is not answering on <host>:<port> after 30s` | The service did not start automatically (needs an Administrator prompt) or is not listening there. Run `net start postgresql-x64-16` from an Administrator prompt, or set `DB_PORT` in `backend/.env` / pass `--db-port`. |
 | `setup.bat` mangles the password              | `cmd.exe` re-parses `&`, `^`, `\|`, `<`, `>` in forwarded arguments. Use the interactive prompt, or run `.\setup.ps1 --db-password="..."` in PowerShell. |
 | `react-scripts` fails to compile with `digital envelope routines::unsupported` | `react-scripts` 5.0.1 predates OpenSSL 3. The resolved webpack (5.110.x) uses a WebAssembly MD4 so this normally does **not** occur; if it does, set `NODE_OPTIONS=--openssl-legacy-provider` before `npm start`. |
 
@@ -689,9 +727,14 @@ it stays local): `agents/` for custom subagents, `skills/` for project skills,
 
 > Any registered user has the power to register new members. Admin users can view and manage all member records, while regular users can only manage the members they created.
 
-## API Endpoints
+## For developers
 
-### Authentication
+The sections below are reference material. You do not need them to run or use the
+app.
+
+### API Endpoints
+
+#### Authentication
 | Method | Endpoint               | Description                               | Auth               |
 | ------ | ---------------------- | ----------------------------------------- | ------------------ |
 | GET    | `/api/health`          | Server health check                       | No                 |
@@ -703,7 +746,7 @@ it stays local): `agents/` for custom subagents, `skills/` for project skills,
 | GET    | `/api/auth/profile`    | Get authenticated user profile            | Yes (Bearer token) |
 | PUT    | `/api/auth/profile`    | Update user profile (with image upload)   | Yes (Bearer token) |
 
-### Member Records
+#### Member Records
 | Method | Endpoint               | Description                               | Auth               |
 | ------ | ---------------------- | ----------------------------------------- | ------------------ |
 | GET    | `/api/records`         | Get all records (admin) or own records    | Yes (Bearer token) |
@@ -712,7 +755,7 @@ it stays local): `agents/` for custom subagents, `skills/` for project skills,
 | PUT    | `/api/records/:id`     | Update member record                      | Yes (Bearer token) |
 | DELETE | `/api/records/:id`     | Delete member record                      | Yes (Bearer token) |
 
-### Locations (Philippine Address Data)
+#### Locations (Philippine Address Data)
 | Method | Endpoint               | Description                               | Auth               |
 | ------ | ---------------------- | ----------------------------------------- | ------------------ |
 | GET    | `/api/locations/countries` | Get list of countries                 | No                 |
@@ -720,12 +763,16 @@ it stays local): `agents/` for custom subagents, `skills/` for project skills,
 | GET    | `/api/locations/cities/:provinceId` | Get cities by province         | No                 |
 | GET    | `/api/locations/barangays/:cityId` | Get barangays by city           | No                 |
 
-### Users
+#### Users
 | Method | Endpoint               | Description                               | Auth               |
 | ------ | ---------------------- | ----------------------------------------- | ------------------ |
 | GET    | `/api/users`           | Get list of all users (admin only)        | Yes (Bearer token, admin) |
 
-## Configuration (.env)
+### Configuration (.env)
+
+The full key-by-key reference, including defaults and what setup prompts you
+for, is in [How `backend/.env` is configured](#how-backendenv-is-configured). The
+bare minimum a working `.env` looks like:
 
 ```
 PORT=5000
@@ -738,7 +785,7 @@ JWT_SECRET=your_secret_key
 OTP_EXPIRY_MINUTES=5
 ```
 
-## Notes
+### Notes
 
 - OTP is logged to the server console (an SMS provider integration can replace this)
 - JWT expires in 1 hour
